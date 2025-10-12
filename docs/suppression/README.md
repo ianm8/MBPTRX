@@ -1,1 +1,1 @@
-Harmonic suppressoin and measured with a Rigol DHO814
+Harmonic suppressoin as measured with a Rigol DHO814
