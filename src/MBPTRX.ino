@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 0.8.240
+ * MBPTRX Version 1.0.240
  *
  * Copyright 2025 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -36,6 +36,8 @@
  *  0.6.240 complex mixer offset
  *  0.7.240 update bandwidths
  *  0.8.240 enable EEPROM writes
+ *  0.9.240 fix CW display width
+ *  1.0.240 bandwith options
  */
 
 //#define DEBUGGING_SKIP
@@ -63,7 +65,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V0.8."
+#define VERSION_STRING "  V1.0."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -85,8 +87,9 @@
 #define DEFAULT_SIDETONE 700ul
 #define DEFAULT_CW_LEVEL 2ul
 #define DEFAULT_MICGAIN 100ul
+#define DEFAULT_BANDWIDTH 3ul
 #define BUTTON_LONG_PRESS_TIME 800ul
-#define TCXO_FREQ 27000000ul
+#define TCXO_FREQ 27000021ul
 #define LPF_I2C_ADDRESS 0x20U
 #define BPF_I2C_ADDRESS 0x21U
 
@@ -226,6 +229,7 @@ volatile static struct
   uint32_t spectype;
   uint32_t jnrlevel;
   uint32_t micgain;
+  uint32_t bandwidth;
   radio_mode_t mode;
   bool tx_enable;
   bool keydown;
@@ -247,6 +251,7 @@ radio =
   SPECTRUM_WIND,
   JNR_OFF,
   DEFAULT_MICGAIN,
+  DEFAULT_BANDWIDTH,
   DEFAULT_MODE,
   false,
   false,
@@ -526,6 +531,7 @@ static void save_settings(void)
   EEPROM.put(0x6*sizeof(uint32_t),(uint32_t)radio.jnrlevel);
   EEPROM.put(0x7*sizeof(uint32_t),(uint32_t)radio.micgain);
   EEPROM.put(0x8*sizeof(uint32_t),(uint32_t)radio.cessb?1u:0u);
+  EEPROM.put(0x9*sizeof(uint32_t),(uint32_t)radio.bandwidth);
   EEPROM.end();
   init_i2s();
   unmute();
@@ -547,10 +553,15 @@ static void restore_settings(void)
     EEPROM.get(0x6*sizeof(uint32_t),data32); radio.jnrlevel = data32;
     EEPROM.get(0x7*sizeof(uint32_t),data32); radio.micgain = data32;
     EEPROM.get(0x8*sizeof(uint32_t),data32); radio.cessb = data32==1?true:false;
+    EEPROM.get(0x9*sizeof(uint32_t),data32); radio.bandwidth = data32;
   }
   if (radio.micgain<25ul || radio.micgain>200ul)
   {
     radio.micgain = DEFAULT_MICGAIN;
+  }
+  if (radio.bandwidth<1ul || radio.bandwidth>5ul)
+  {
+    radio.bandwidth = DEFAULT_BANDWIDTH;
   }
   EEPROM.end();
 }
@@ -1320,11 +1331,20 @@ static void show_cessb_settings(void)
     lcd.setTextSize(1);
     lcd.setTextColor(LCD_GREEN);
     lcd.setCursor(POS_CESSB_MIC_X,POS_CESSB_MIC_Y);
-    lcd.print("CESSB: ");
+    lcd.print("CESSB:");
     lcd.print(radio.cessb?"On":"Off");
-    lcd.print("  Mic Gain: ");
+    lcd.print("  Mic:");
     lcd.print(radio.micgain);
     lcd.print("%");
+    lcd.print("  BW:");
+    switch (radio.bandwidth)
+    {
+      case 1: lcd.print("2000Hz"); break;
+      case 2: lcd.print("2200Hz"); break;
+      case 3: lcd.print("2400Hz"); break;
+      case 4: lcd.print("2600Hz"); break;
+      case 5: lcd.print("2800Hz"); break;
+    }
   }
 }
 
@@ -1361,11 +1381,17 @@ static void show_spectrum(void)
         break;
       }
       case MODE_CWL:
-      case MODE_CWU:
       {
         for (uint32_t x=0;x<5;x++)
         {
           lcd.drawLine(POS_CENTER_LEFT-x,POS_WATER_Y,POS_CENTER_LEFT-x,POS_WATER_Y+31,LCD_MODE);
+        }
+        break;
+      }
+      case MODE_CWU:
+      {
+        for (uint32_t x=0;x<5;x++)
+        {
           lcd.drawLine(POS_CENTER_RIGHT+x,POS_WATER_Y,POS_CENTER_RIGHT+x,POS_WATER_Y+31,LCD_MODE);
         }
         break;
@@ -1393,11 +1419,17 @@ static void show_spectrum(void)
         break;
       }
       case MODE_CWL:
-      case MODE_CWU:
       {
-        for (uint32_t x=0;x<6;x++)
+        for (uint32_t x=0;x<5;x++)
         {
           lcd.drawLine(POS_CENTER_LEFT-x-5,POS_WATER_Y,POS_CENTER_LEFT-x-5,POS_WATER_Y+31,LCD_MODE);
+        }
+        break;
+      }
+      case MODE_CWU:
+      {
+        for (uint32_t x=0;x<5;x++)
+        {
           lcd.drawLine(POS_CENTER_RIGHT+x-5,POS_WATER_Y,POS_CENTER_RIGHT+x-5,POS_WATER_Y+31,LCD_MODE);
         }
         break;
@@ -1405,7 +1437,7 @@ static void show_spectrum(void)
     }
   }
 
-  // max of 4 adjacent magnitudes
+  // greatest of 4 adjacent magnitudes
   for (uint32_t x=0;x<LCD_WIDTH;x++)
   {
     // x=0 => x*4+33 = 0*4+33 = 33
@@ -1797,7 +1829,7 @@ void __not_in_flash_func(loop)(void)
           dac_h = dac_audio >> 6;
           dac_l = dac_audio & 0x3f;
         }
-        // only set level in TX mode
+        // only change TX level in TX mode
         static int32_t rotary = 0l;
         switch (r.process())
         {
@@ -1865,9 +1897,7 @@ void __not_in_flash_func(loop)(void)
           adc_sample_p &= (MAX_ADC_SAMPLES-1);
           int32_t dac_audio = 0;
           const uint8_t jnr = radio.jnrlevel;
-////
-          //const uint8_t bw = radio.bandwidth;
-          const uint8_t bw = 0;
+          const uint8_t bw = radio.bandwidth - 1;
           switch (radio.mode)
           {
             case MODE_LSB: dac_audio = DSP::process_ssb(qq,ii,jnr,bw); break;
@@ -1923,8 +1953,8 @@ static void process_spectrum(void)
     else if (radio.frequency<8000000ul) gain = 0;
     else if (radio.frequency<15000000ul) gain = 1;
     else if (radio.frequency<20000000ul) gain = 2;
-    else if (radio.frequency<25000000ul) gain = 2;
-    else if (radio.frequency<30000000ul) gain = 2;
+    else if (radio.frequency<25000000ul) gain = 3;
+    else if (radio.frequency<30000000ul) gain = 3;
   }
   const uint32_t sample_p = adc_sample_p;
   if (sample_p<800)
@@ -2145,6 +2175,7 @@ void loop1(void)
   static uint32_t old_spectype = radio.spectype;
   static uint32_t old_jnrlevel = radio.jnrlevel;
   static uint32_t old_micgain = radio.micgain;
+  static uint32_t old_bandwidth = radio.bandwidth;
   static bool old_cessb = radio.cessb;
   static mode_t old_mode = radio.mode;
 
@@ -2185,6 +2216,11 @@ void loop1(void)
         case OPTION_BAND_12M:       radio.band = BAND_12M;                          break;
         case OPTION_BAND_10M:       radio.band = BAND_10M;                          break;
         case OPTION_BAND_SWL:       radio.band = BAND_SWL;                          break;
+        case OPTION_BW_2000:        radio.bandwidth = 1ul;                          break;
+        case OPTION_BW_2200:        radio.bandwidth = 2ul;                          break;
+        case OPTION_BW_2400:        radio.bandwidth = 3ul;                          break;
+        case OPTION_BW_2600:        radio.bandwidth = 4ul;                          break;
+        case OPTION_BW_2800:        radio.bandwidth = 5ul;                          break;
         case OPTION_SIDETONE_500:   radio.sidetone = 500u;                          break;
         case OPTION_SIDETONE_550:   radio.sidetone = 550u;                          break;
         case OPTION_SIDETONE_600:   radio.sidetone = 600u;                          break;
@@ -2268,6 +2304,12 @@ void loop1(void)
         settings_changed = true;
       }
 
+      // CESSB
+      if (radio.bandwidth != old_bandwidth)
+      {
+        old_bandwidth = radio.bandwidth;
+        settings_changed = true;
+      }
       // CESSB
       if (radio.cessb != old_cessb)
       {

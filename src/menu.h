@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 12U
+#define NUM_MENU_ITEMS 13U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -40,6 +40,7 @@ enum menu_top_t
   MENU_BAND,
   MENU_STEP,
   MENU_MODE,
+  MENU_BANDWIDTH,
   MENU_CW_SPEED,
   MENU_SIDETONE,
   MENU_SIDETONE_LEVEL,
@@ -74,6 +75,11 @@ enum option_value_t
   OPTION_BAND_12M,
   OPTION_BAND_10M,
   OPTION_BAND_SWL,
+  OPTION_BW_2000,
+  OPTION_BW_2200,
+  OPTION_BW_2400,
+  OPTION_BW_2600,
+  OPTION_BW_2800,
   OPTION_GAUSSIAN_ON,
   OPTION_GAUSSIAN_OFF,
   OPTION_CW_SPEED_10,
@@ -189,6 +195,23 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_JNR_OFF,"Off"},
       {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
+    }
+  },
+  {
+    MENU_BANDWIDTH,
+    "Bandwidth",
+    6U,
+    {
+      {OPTION_BW_2000,"2000 Hz"},
+      {OPTION_BW_2200,"2200 Hz"},
+      {OPTION_BW_2400,"2400 Hz"},
+      {OPTION_BW_2600,"2600 Hz"},
+      {OPTION_BW_2800,"2800 Hz"},
+      {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},

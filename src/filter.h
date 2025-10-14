@@ -4540,14 +4540,13 @@ namespace FILTER
   }
 
   typedef const float (*bw_func_t)(const float);
-  static const bw_func_t bwf[6] =
+  static const bw_func_t bwf[5] =
   {
-    lpf_2600f_rx,
-    lpf_2200f_rx,
-    lpf_2400f_rx,
-    lpf_2600f_rx,
-    lpf_2800f_rx,
-    lpf_3000f_rx
+    lpf_2200f_rx, // BW: 2000Hz
+    lpf_2400f_rx, // BW: 2200Hz
+    lpf_2600f_rx, // BW: 2400Hz
+    lpf_2800f_rx, // BW: 2600Hz
+    lpf_3000f_rx  // BW: 2800Hz
   };
 }
 
