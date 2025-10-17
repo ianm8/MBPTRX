@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 1.0.240
+ * MBPTRX Version 1.2.240
  *
  * Copyright 2025 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -37,7 +37,9 @@
  *  0.7.240 update bandwidths
  *  0.8.240 enable EEPROM writes
  *  0.9.240 fix CW display width
- *  1.0.240 bandwith options
+ *  1.0.240 RX bandwith options
+ *  1.1.240 code cleanup
+ *  1.2.240 fix SWR display
  */
 
 //#define DEBUGGING_SKIP
@@ -65,7 +67,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V1.0."
+#define VERSION_STRING "  V1.2."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -646,36 +648,6 @@ void setup(void)
   bpf_port.output(I2C_PIN_BPF2,TCA9534::Level::H);
   bpf_port.output(I2C_PIN_TXN,TCA9534::Level::H);
   bpf_port.output(I2C_PIN_RXN,TCA9534::Level::L);
-
-////
-/*
-  uint32_t sig_delay = 1000;
-  for (;;)
-  {
-    digitalWrite(LED_BUILTIN,LOW);
-    bpf_port.output(TCA9534::Level::L);
-    delay(sig_delay);
-    digitalWrite(LED_BUILTIN,HIGH);
-    bpf_port.output(TCA9534::Level::H);
-    delay(sig_delay);
-    const uint8_t d = bpf_port.output();
-    if (d!=0xff) sig_delay = 100;
-  }
-  for (;;)
-  {
-    digitalWrite(LED_BUILTIN,LOW);
-    // U23 pin 4
-    bpf_port.output(I2C_PIN_BPF1,TCA9534::Level::L);
-    // U23 pin 6
-    bpf_port.output(I2C_PIN_TXN,TCA9534::Level::L);
-    delay(1000);
-    digitalWrite(LED_BUILTIN,HIGH);
-    bpf_port.output(I2C_PIN_BPF1,TCA9534::Level::H);
-    bpf_port.output(I2C_PIN_TXN,TCA9534::Level::H);
-    delay(1000);
-  }
-*/
-
   delay(40);
   digitalWrite(LED_BUILTIN,LOW);
 
@@ -938,98 +910,6 @@ static void show_tuning_step(void)
   lcd.print(radio.step);
 }
 
-////
-/*
-static void show_swr(void)
-{
-  static const float diode_drop = 0.3f;
-  static const float diode_comp = diode_drop / 2.0f;
-  volatile static uint32_t max_vswr = 0; 
-  volatile static uint32_t max_po = 0; 
-  if (!radio.tx_enable)
-  {
-    max_vswr = 0;
-    max_po = 0;
-    return;
-  }
-  const uint32_t adc_fwd_raw = (uint32_t)fwdADC.read();
-  const uint32_t adc_ref_raw = (uint32_t)refADC.read();
-  if (adc_fwd_raw==0xffffu || adc_ref_raw==0xffffu)
-  {
-    return;
-  }
-  const float adcfwd = (float)(adc_fwd_raw);
-  const float adcref = (float)(adc_ref_raw);
-  const float vfwd = (adcfwd * 3.3f / 1023.0f) * 40.0f;
-  const float vref = (adcref * 3.3f / 1023.0f) * 40.0f;
-  uint32_t vswr = 100u;
-  if (vfwd>vref)
-  {
-    vswr = (uint32_t)(100.0f * (vfwd + vref) / (vfwd - vref));
-    vswr = min(vswr,999u);
-  }
-  if (vswr>max_vswr)
-  {
-    max_vswr = vswr;
-  }
-
-  // power out
-  // compensate for diode drop
-  // note:
-  //  voltage at ADC will be
-  //  1/10 (transformer voltage ratio)
-  //  1/2 (convert from pp to peak)
-  //  less diode drop (~0.3v)
-  //  1/2 (resistor divider)
-  const float pov = (adcfwd * 3.3f / 1023.0f + diode_comp) * 40.0f;
-  const uint32_t po = (uint32_t)(((pov * pov) / 400.0f) * 10.0f + 0.5f);
-  if (po>max_po)
-  {
-    max_po = po;
-  }
-
-  // dispplay SWR
-  char sz_swr[16] = "";
-  memset(sz_swr,0,sizeof(sz_swr));
-  ultoa(max_vswr,sz_swr,10);
-  sz_swr[3] = sz_swr[2];
-  sz_swr[2] = sz_swr[1];
-  sz_swr[1] = '.';
-  lcd.setTextSize(1);
-  lcd.setCursor(POS_SWR_X-25,POS_SWR_Y);
-  lcd.setTextColor(LCD_WHITE);
-  lcd.print("SWR");
-  lcd.setCursor(POS_SWR_X-5,POS_SWR_Y);
-  lcd.setTextColor(LCD_WHITE);
-  lcd.print(sz_swr);
-
-  // display power
-  char sz_po[16] = "";
-  memset(sz_po,0,sizeof(sz_po));
-  ultoa(max_po,sz_po,10);
-  if (max_po<10)
-  {
-    sz_po[2] = sz_po[0];
-    sz_po[1] = '.';
-    sz_po[0] = '0';
-  }
-  else if (max_po<100)
-  {
-    sz_po[2] = sz_po[1];
-    sz_po[1] = '.';
-  }
-  else
-  {
-    sz_po[3] = sz_po[2];
-    sz_po[2] = '.';
-  }
-  lcd.setCursor(POS_SWR_X+25,POS_SWR_Y);
-  lcd.print("PO");
-  lcd.setCursor(POS_SWR_X+40,POS_SWR_Y);
-  lcd.print(sz_po);
-}
-*/
-
 static void show_swr(void)
 {
   static const uint32_t PO_DECAY_RATE = 250ul;
@@ -1058,9 +938,8 @@ static void show_swr(void)
   if (vfwd>vref)
   {
     vswr = (uint32_t)(100.0f * (vfwd + vref) / (vfwd - vref));
-    vswr = min(vswr,999u);
+    vswr = constrain(vswr,100u,999u);
   }
-
   // power out
   // Vpp * Vpp / 400
   const uint32_t now = millis();
@@ -2485,7 +2364,7 @@ void loop1(void)
       {
         process_ssb_tx();
       }
-////
+
       // back to receive
       lpf_port.output(I2C_PIN_TXENABLE,TCA9534::Level::L);
       delay(50);
@@ -2497,24 +2376,6 @@ void loop1(void)
       update_display();
       unmute();
       digitalWrite(LED_BUILTIN,LOW);
-////
-//
-// this works:
-/*
-      lpf_port.output(I2C_PIN_TXENABLE,TCA9534::Level::L);
-      delay(50);
-      digitalWrite(PIN_TXBIAS,LOW);
-      radio.tx_enable = false;
-      bpf_port.output(I2C_PIN_TXN,TCA9534::Level::H);
-      delay(10);
-      set_frequency();
-      delay(10);
-      bpf_port.output(I2C_PIN_RXN,TCA9534::Level::L);
-      delay(10);
-      digitalWrite(LED_BUILTIN,LOW);
-      update_display();
-      unmute();
-*/      
       DSP::agc_peak = saved_agc;
     }
   }
