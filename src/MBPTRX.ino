@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 1.2.240
+ * MBPTRX Version 1.3.240
  *
  * Copyright 2025 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -40,6 +40,7 @@
  *  1.0.240 RX bandwith options
  *  1.1.240 code cleanup
  *  1.2.240 fix SWR display
+ *  1.3.240 graph power and SWR
  */
 
 //#define DEBUGGING_SKIP
@@ -67,7 +68,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V1.2."
+#define VERSION_STRING "  V1.3."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -239,6 +240,7 @@ volatile static struct
   bool gaussian;
   bool menu_active;
   bool mode_auto;
+  bool graph_swr;
 }
 radio =
 {
@@ -260,7 +262,8 @@ radio =
   false,
   true,
   false,
-  true
+  true,
+  false
 };
 
 static struct
@@ -534,6 +537,7 @@ static void save_settings(void)
   EEPROM.put(0x7*sizeof(uint32_t),(uint32_t)radio.micgain);
   EEPROM.put(0x8*sizeof(uint32_t),(uint32_t)radio.cessb?1u:0u);
   EEPROM.put(0x9*sizeof(uint32_t),(uint32_t)radio.bandwidth);
+  EEPROM.put(0xa*sizeof(uint32_t),(uint32_t)radio.graph_swr?1u:0u);
   EEPROM.end();
   init_i2s();
   unmute();
@@ -556,6 +560,7 @@ static void restore_settings(void)
     EEPROM.get(0x7*sizeof(uint32_t),data32); radio.micgain = data32;
     EEPROM.get(0x8*sizeof(uint32_t),data32); radio.cessb = data32==1?true:false;
     EEPROM.get(0x9*sizeof(uint32_t),data32); radio.bandwidth = data32;
+    EEPROM.get(0xa*sizeof(uint32_t),data32); radio.graph_swr = data32==1?true:false;
   }
   if (radio.micgain<25ul || radio.micgain>200ul)
   {
@@ -959,45 +964,64 @@ static void show_swr(void)
     po_decay = now + PO_DECAY_RATE;
   }
 
-  // display SWR
-  char sz_swr[16] = "";
-  memset(sz_swr,0,sizeof(sz_swr));
-  ultoa(vswr,sz_swr,10);
-  sz_swr[3] = sz_swr[2];
-  sz_swr[2] = sz_swr[1];
-  sz_swr[1] = '.';
-  lcd.setTextSize(1);
-  lcd.setCursor(POS_SWR_X-25,POS_SWR_Y);
-  lcd.setTextColor(LCD_WHITE);
-  lcd.print("SWR");
-  lcd.setCursor(POS_SWR_X-5,POS_SWR_Y);
-  lcd.setTextColor(LCD_WHITE);
-  lcd.print(sz_swr);
-
-  // display power
-  char sz_po[16] = "";
-  memset(sz_po,0,sizeof(sz_po));
-  ultoa(max_po,sz_po,10);
-  if (max_po<10)
+  // show power and SWR
+  if (radio.graph_swr)
   {
-    sz_po[2] = sz_po[0];
-    sz_po[1] = '.';
-    sz_po[0] = '0';
-  }
-  else if (max_po<100)
-  {
-    sz_po[2] = sz_po[1];
-    sz_po[1] = '.';
+    // graph power
+    const uint8_t p = max_po / 10u;
+    for (uint8_t i=0;i<p;i++)
+    {
+      lcd.fillRect(POS_METER_X+i*5+0,POS_METER_Y+14,4,4,LCD_WHITE);
+    }
+    // graph SWR
+    const uint8_t s = vswr / 100u;
+    for (uint8_t i=0;i<s;i++)
+    {
+      lcd.fillRect(POS_METER_X+i*5+0,POS_METER_Y+20,4,4,LCD_WHITE);
+    }
   }
   else
   {
-    sz_po[3] = sz_po[2];
-    sz_po[2] = '.';
+    // display SWR
+    char sz_swr[16] = "";
+    memset(sz_swr,0,sizeof(sz_swr));
+    ultoa(vswr,sz_swr,10);
+    sz_swr[3] = sz_swr[2];
+    sz_swr[2] = sz_swr[1];
+    sz_swr[1] = '.';
+    lcd.setTextSize(1);
+    lcd.setCursor(POS_SWR_X-25,POS_SWR_Y);
+    lcd.setTextColor(LCD_WHITE);
+    lcd.print("SWR");
+    lcd.setCursor(POS_SWR_X-5,POS_SWR_Y);
+    lcd.setTextColor(LCD_WHITE);
+    lcd.print(sz_swr);
+
+    // display power
+    char sz_po[16] = "";
+    memset(sz_po,0,sizeof(sz_po));
+    ultoa(max_po,sz_po,10);
+    if (max_po<10)
+    {
+      sz_po[2] = sz_po[0];
+      sz_po[1] = '.';
+      sz_po[0] = '0';
+    }
+    else if (max_po<100)
+    {
+      sz_po[2] = sz_po[1];
+      sz_po[1] = '.';
+    }
+    else
+    {
+      sz_po[3] = sz_po[2];
+      sz_po[2] = '.';
+    }
+    lcd.setCursor(POS_SWR_X+25,POS_SWR_Y);
+    lcd.print("PO");
+    lcd.setCursor(POS_SWR_X+40,POS_SWR_Y);
+    lcd.print(sz_po);
   }
-  lcd.setCursor(POS_SWR_X+25,POS_SWR_Y);
-  lcd.print("PO");
-  lcd.setCursor(POS_SWR_X+40,POS_SWR_Y);
-  lcd.print(sz_po);
 }
 
 static void show_tx(void)
@@ -2056,6 +2080,7 @@ void loop1(void)
   static uint32_t old_micgain = radio.micgain;
   static uint32_t old_bandwidth = radio.bandwidth;
   static bool old_cessb = radio.cessb;
+  static bool old_graph_swr = radio.graph_swr;
   static mode_t old_mode = radio.mode;
 
   // process button press
@@ -2134,6 +2159,8 @@ void loop1(void)
         case OPTION_CESSB_OFF:      radio.cessb = false;                            break;
         case OPTION_GAUSSIAN_ON:    radio.gaussian = true;                          break;
         case OPTION_GAUSSIAN_OFF:   radio.gaussian = false;                         break;
+        case OPTION_GRAPH_SWR_Y:    radio.graph_swr = true;                         break;
+        case OPTION_GRAPH_SWR_N:    radio.graph_swr = false;                        break;
         case OPTION_EXIT:           radio.menu_active = false;                      break;
       }
 
@@ -2183,16 +2210,24 @@ void loop1(void)
         settings_changed = true;
       }
 
-      // CESSB
+      // bandwidth
       if (radio.bandwidth != old_bandwidth)
       {
         old_bandwidth = radio.bandwidth;
         settings_changed = true;
       }
+
       // CESSB
       if (radio.cessb != old_cessb)
       {
         old_cessb = radio.cessb;
+        settings_changed = true;
+      }
+
+      // graph SWR
+      if (radio.graph_swr != old_graph_swr)
+      {
+        old_graph_swr = radio.graph_swr;
         settings_changed = true;
       }
 

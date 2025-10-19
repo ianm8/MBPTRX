@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 13U
+#define NUM_MENU_ITEMS 14U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -48,6 +48,7 @@ enum menu_top_t
   MENU_JNR,
   MENU_MIC,
   MENU_CESSB,
+  MENU_GRAPH_SWR,
   MENU_GAUSSIAN,
   MENU_EXIT
 };
@@ -114,6 +115,8 @@ enum option_value_t
   OPTION_MIC_200,
   OPTION_CESSB_ON,
   OPTION_CESSB_OFF,
+  OPTION_GRAPH_SWR_Y,
+  OPTION_GRAPH_SWR_N,
   OPTION_NONE,
   OPTION_EXIT
 };
@@ -300,6 +303,23 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_MIC_175,"Gain 175%"},
       {OPTION_MIC_200,"Gain 200%"},
       {OPTION_EXIT,"Exit"},
+    }
+  },
+  {
+    MENU_GRAPH_SWR,
+    "Graph SWR",
+    3U,
+    {
+      {OPTION_GRAPH_SWR_Y,"Yes"},
+      {OPTION_GRAPH_SWR_N,"No"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
     }
   },
   {
