@@ -11,3 +11,4 @@ Some history
  * 1.0.240 RX bandwith options
  * 1.1.240 code cleanup
  * 1.2.240 fix SWR display
+ * 1.3.240 graph power and SWR
