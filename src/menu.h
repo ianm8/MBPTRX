@@ -101,6 +101,7 @@ enum option_value_t
   OPTION_SIDETONE_HI,
   OPTION_SPECTRUM_WIND,
   OPTION_SPECTRUM_GRASS,
+  OPTION_SPECTRUM_LEVEL,
   OPTION_JNR_OFF,
   OPTION_JNR_LEVEL1,
   OPTION_JNR_LEVEL2,
@@ -275,12 +276,12 @@ menu_options[NUM_MENU_ITEMS] =
   {
     MENU_SPECTRUM_TYPE,
     "Spectrum",
-    3U,
+    4U,
     {
       {OPTION_SPECTRUM_WIND,"Wind"},
       {OPTION_SPECTRUM_GRASS,"Grass"},
+      {OPTION_SPECTRUM_LEVEL,"Level"},
       {OPTION_EXIT,"Exit"},
-      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},

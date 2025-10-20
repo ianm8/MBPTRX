@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 1.3.240
+ * MBPTRX Version 1.5.240
  *
  * Copyright 2025 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -41,6 +41,8 @@
  *  1.1.240 code cleanup
  *  1.2.240 fix SWR display
  *  1.3.240 graph power and SWR
+ *  1.4.240 set spectrum level
+ *  1.5.240 exit level if TX
  */
 
 //#define DEBUGGING_SKIP
@@ -68,7 +70,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V1.3."
+#define VERSION_STRING "  V1.5."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -82,6 +84,7 @@
 #define BAND_SWL 8
 #define BAND_MIN BAND_80M
 #define BAND_MAX BAND_SWL
+#define NUM_BANDS 9
 #define DEFAULT_FREQUENCY 7100000ul
 #define DEFAULT_BAND BAND_40M
 #define DEFAULT_MODE MODE_LSB
@@ -93,6 +96,8 @@
 #define DEFAULT_BANDWIDTH 3ul
 #define BUTTON_LONG_PRESS_TIME 800ul
 #define TCXO_FREQ 27000021ul
+#define SPECTRUM_LEVEL_MIN -4
+#define SPECTRUM_LEVEL_MAX 4
 #define LPF_I2C_ADDRESS 0x20U
 #define BPF_I2C_ADDRESS 0x21U
 
@@ -241,6 +246,7 @@ volatile static struct
   bool menu_active;
   bool mode_auto;
   bool graph_swr;
+  int8_t level[NUM_BANDS];
 }
 radio =
 {
@@ -263,7 +269,8 @@ radio =
   true,
   false,
   true,
-  false
+  false,
+  {0,0,0,0,0,0,0,0,0}
 };
 
 static struct
@@ -339,6 +346,7 @@ volatile static bool dit_latched = false;
 volatile static bool dah_latched = false;
 volatile static bool save_settings_now = false;
 volatile static bool setup_complete = false;
+volatile static bool set_spectrum_level = false;
 
 volatile static uint32_t wp = 0;
 static uint8_t water[WATERFALL_ROWS][LCD_WIDTH] = {0};
@@ -538,6 +546,10 @@ static void save_settings(void)
   EEPROM.put(0x8*sizeof(uint32_t),(uint32_t)radio.cessb?1u:0u);
   EEPROM.put(0x9*sizeof(uint32_t),(uint32_t)radio.bandwidth);
   EEPROM.put(0xa*sizeof(uint32_t),(uint32_t)radio.graph_swr?1u:0u);
+  for (uint32_t i=0;i<NUM_BANDS;i++)
+  {
+    EEPROM.put((i+0xb)*sizeof(uint32_t),(uint32_t)radio.level[i]);
+  }
   EEPROM.end();
   init_i2s();
   unmute();
@@ -561,6 +573,15 @@ static void restore_settings(void)
     EEPROM.get(0x8*sizeof(uint32_t),data32); radio.cessb = data32==1?true:false;
     EEPROM.get(0x9*sizeof(uint32_t),data32); radio.bandwidth = data32;
     EEPROM.get(0xa*sizeof(uint32_t),data32); radio.graph_swr = data32==1?true:false;
+    for (uint32_t i=0;i<NUM_BANDS;i++)
+    {
+      EEPROM.get((i+0xb)*sizeof(uint32_t),data32);
+      radio.level[i] = (int8_t)data32;
+      if (radio.level[i]<SPECTRUM_LEVEL_MIN || radio.level[i]>SPECTRUM_LEVEL_MAX)
+      {
+        radio.level[i] = 0;
+      }
+    }
   }
   if (radio.micgain<25ul || radio.micgain>200ul)
   {
@@ -1197,6 +1218,10 @@ static void show_meter_dial(const uint8_t sig)
 
 static void show_cw_settings(void)
 {
+  if (set_spectrum_level)
+  {
+    return;
+  }
   if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
   {
     lcd.setTextSize(1);
@@ -1229,24 +1254,36 @@ static void show_cw_settings(void)
 
 static void show_cessb_settings(void)
 {
-  if (radio.mode==MODE_LSB || radio.mode==MODE_USB)
+  if (set_spectrum_level)
   {
     lcd.setTextSize(1);
     lcd.setTextColor(LCD_GREEN);
     lcd.setCursor(POS_CESSB_MIC_X,POS_CESSB_MIC_Y);
-    lcd.print("CESSB:");
-    lcd.print(radio.cessb?"On":"Off");
-    lcd.print("  Mic:");
-    lcd.print(radio.micgain);
-    lcd.print("%");
-    lcd.print("  BW:");
-    switch (radio.bandwidth)
+    lcd.print("Spectrum Level: ");
+    lcd.print(radio.level[radio.band]*6);
+    lcd.print("dB");
+  }
+  else
+  {
+    if (radio.mode==MODE_LSB || radio.mode==MODE_USB)
     {
-      case 1: lcd.print("2000Hz"); break;
-      case 2: lcd.print("2200Hz"); break;
-      case 3: lcd.print("2400Hz"); break;
-      case 4: lcd.print("2600Hz"); break;
-      case 5: lcd.print("2800Hz"); break;
+      lcd.setTextSize(1);
+      lcd.setTextColor(LCD_GREEN);
+      lcd.setCursor(POS_CESSB_MIC_X,POS_CESSB_MIC_Y);
+      lcd.print("CESSB:");
+      lcd.print(radio.cessb?"On":"Off");
+      lcd.print("  Mic:");
+      lcd.print(radio.micgain);
+      lcd.print("%");
+      lcd.print("  BW:");
+      switch (radio.bandwidth)
+      {
+        case 1: lcd.print("2000Hz"); break;
+        case 2: lcd.print("2200Hz"); break;
+        case 3: lcd.print("2400Hz"); break;
+        case 4: lcd.print("2600Hz"); break;
+        case 5: lcd.print("2800Hz"); break;
+      }
     }
   }
 }
@@ -1848,17 +1885,7 @@ static void process_spectrum(void)
 {
   int16_t data_re[1024] = {0};
   int16_t data_im[1024] = {0};
-//// set gain based on frequency
-  int8_t gain = 0;
-  if (!radio.tx_enable)
-  {
-    if (radio.frequency<5000000ul) gain = -1;
-    else if (radio.frequency<8000000ul) gain = 0;
-    else if (radio.frequency<15000000ul) gain = 1;
-    else if (radio.frequency<20000000ul) gain = 2;
-    else if (radio.frequency<25000000ul) gain = 3;
-    else if (radio.frequency<30000000ul) gain = 3;
-  }
+  const int8_t gain = radio.tx_enable?0:radio.level[radio.band];
   const uint32_t sample_p = adc_sample_p;
   if (sample_p<800)
   {
@@ -2079,6 +2106,7 @@ void loop1(void)
   static uint32_t old_jnrlevel = radio.jnrlevel;
   static uint32_t old_micgain = radio.micgain;
   static uint32_t old_bandwidth = radio.bandwidth;
+  static int8_t old_level = 0;
   static bool old_cessb = radio.cessb;
   static bool old_graph_swr = radio.graph_swr;
   static mode_t old_mode = radio.mode;
@@ -2143,6 +2171,7 @@ void loop1(void)
         case OPTION_CW_SPEED_30:    radio.cw_dit = 40u;                             break;
         case OPTION_SPECTRUM_WIND:  radio.spectype = SPECTRUM_WIND;                 break;
         case OPTION_SPECTRUM_GRASS: radio.spectype = SPECTRUM_GRASS;                break;
+        case OPTION_SPECTRUM_LEVEL: set_spectrum_level = true;                      break;
         case OPTION_JNR_LEVEL1:     radio.jnrlevel = JNR_LEVEL1;                    break;
         case OPTION_JNR_LEVEL2:     radio.jnrlevel = JNR_LEVEL2;                    break;
         case OPTION_JNR_LEVEL3:     radio.jnrlevel = JNR_LEVEL3;                    break;
@@ -2162,6 +2191,11 @@ void loop1(void)
         case OPTION_GRAPH_SWR_Y:    radio.graph_swr = true;                         break;
         case OPTION_GRAPH_SWR_N:    radio.graph_swr = false;                        break;
         case OPTION_EXIT:           radio.menu_active = false;                      break;
+      }
+
+      if (set_spectrum_level)
+      {
+        old_level = radio.level[radio.band];
       }
 
       // when settings change save them
@@ -2275,94 +2309,131 @@ void loop1(void)
     else
     {
       // menu not active
-      switch (button_state)
+      if (set_spectrum_level)
       {
-        case BUTTON_IDLE:
+        // rotary sets level
+        mutex_enter_blocking(&rotary_mutex);
+        const int32_t level_delta = radio.tune;
+        radio.tune = 0;
+        mutex_exit(&rotary_mutex);
+        int8_t new_level = radio.level[radio.band] + level_delta;
+        new_level = constrain(new_level,SPECTRUM_LEVEL_MIN,SPECTRUM_LEVEL_MAX);
+        radio.level[radio.band] = new_level;
+        if (digitalRead(PIN_ENCBUT)==LOW)
         {
-          if (digitalRead(PIN_ENCBUT)==LOW)
+          // if button pressed
+          // save new level (if changed)
+          // wait for button release
+          if (new_level!=old_level)
           {
-            button_state = BUTTON_TEST_SHORT;
-            button_timer = millis()+BUTTON_LONG_PRESS_TIME;
-            delay(50);
-          }
-          break;
-        }
-        case BUTTON_TEST_SHORT:
-        {
-          const uint32_t now = millis();
-          if (digitalRead(PIN_ENCBUT)==HIGH)
-          {
-            button_state = BUTTON_IDLE;
-            if (now<button_timer)
+            save_settings_now = true;
+            while (save_settings_now)
             {
-              button_action = BUTTON_SHORT_PRESS;
+              // EEPROM will pause this core
+              // do nothing until saved
+              tight_loop_contents();
             }
-            delay(50);
+          }
+          delay(50);
+          while (digitalRead(PIN_ENCBUT)==LOW)
+          {
+            tight_loop_contents();
+          }
+          delay(50);
+          set_spectrum_level = false;
+        }
+      }
+      else
+      {
+        switch (button_state)
+        {
+          case BUTTON_IDLE:
+          {
+            if (digitalRead(PIN_ENCBUT)==LOW)
+            {
+              button_state = BUTTON_TEST_SHORT;
+              button_timer = millis()+BUTTON_LONG_PRESS_TIME;
+              delay(50);
+            }
             break;
           }
-          if (now>button_timer)
+          case BUTTON_TEST_SHORT:
           {
-            button_state = BUTTON_WAIT_RELEASE;
-            button_action = BUTTON_LONG_PRESS;
+            const uint32_t now = millis();
+            if (digitalRead(PIN_ENCBUT)==HIGH)
+            {
+              button_state = BUTTON_IDLE;
+              if (now<button_timer)
+              {
+                button_action = BUTTON_SHORT_PRESS;
+              }
+              delay(50);
+              break;
+            }
+            if (now>button_timer)
+            {
+              button_state = BUTTON_WAIT_RELEASE;
+              button_action = BUTTON_LONG_PRESS;
+            }
+            break;
           }
-          break;
-        }
-        case BUTTON_WAIT_RELEASE:
-        {
-          if (digitalRead(PIN_ENCBUT)==HIGH)
+          case BUTTON_WAIT_RELEASE:
           {
-            button_state = BUTTON_IDLE;
-            delay(50);
+            if (digitalRead(PIN_ENCBUT)==HIGH)
+            {
+              button_state = BUTTON_IDLE;
+              delay(50);
+            }
+            break;
           }
-          break;
         }
-      }
 
-      // process button action
-      switch (button_action)
-      {
-        case BUTTON_SHORT_PRESS:
+        // process button action
+        switch (button_action)
         {
-          radio.step *= 10u;
-          if (radio.step>1000u) radio.step = 100u;
-          break;
+          case BUTTON_SHORT_PRESS:
+          {
+            radio.step *= 10u;
+            if (radio.step>1000u) radio.step = 100u;
+            break;
+          }
+          case BUTTON_LONG_PRESS:
+          {
+            init_menu();
+            radio.menu_active = true;
+            break;
+          }
         }
-        case BUTTON_LONG_PRESS:
-        {
-          init_menu();
-          radio.menu_active = true;
-          break;
-        }
-      }
 
-      // set the mode based on frequency if auto
-      const radio_mode_t auto_mode = get_mode_auto();
-      if (radio.mode != auto_mode)
-      {
-        radio.mode = auto_mode;
-      }
-
-      // process main tuning
-      mutex_enter_blocking(&rotary_mutex);
-      const int32_t tuning_delta = radio.tune;
-      radio.tune = 0;
-      mutex_exit(&rotary_mutex);
-      uint32_t new_frequency = radio.frequency;
-      new_frequency = new_frequency+(tuning_delta * (int32_t)radio.step);
-      new_frequency = new_frequency/radio.step;
-      new_frequency = new_frequency*radio.step;
-      new_frequency = constrain(new_frequency,bands[radio.band].lo,bands[radio.band].hi);
-      if (new_frequency!=old_frequency || radio.mode!=old_mode)
-      {
-        radio.frequency = new_frequency;
-        old_frequency = new_frequency;
-        old_mode = radio.mode;
-        set_frequency();
-        if (radio.band==BAND_SWL)
+        // set the mode based on frequency if auto
+        const radio_mode_t auto_mode = get_mode_auto();
+        if (radio.mode != auto_mode)
         {
-          set_filter();
+          radio.mode = auto_mode;
         }
-      } // frequency change
+
+        // process main tuning
+        mutex_enter_blocking(&rotary_mutex);
+        const int32_t tuning_delta = radio.tune;
+        radio.tune = 0;
+        mutex_exit(&rotary_mutex);
+        uint32_t new_frequency = radio.frequency;
+        new_frequency = new_frequency+(tuning_delta * (int32_t)radio.step);
+        new_frequency = new_frequency/radio.step;
+        new_frequency = new_frequency*radio.step;
+        new_frequency = constrain(new_frequency,bands[radio.band].lo,bands[radio.band].hi);
+        if (new_frequency!=old_frequency || radio.mode!=old_mode)
+        {
+          radio.frequency = new_frequency;
+          old_frequency = new_frequency;
+          old_mode = radio.mode;
+          set_frequency();
+          if (radio.band==BAND_SWL)
+          {
+            set_filter();
+          }
+        } // frequency change
+      } // spectrum level
     } // menu active
   } // receive mode
  
@@ -2391,6 +2462,12 @@ void loop1(void)
     {
       const float saved_agc = DSP::agc_peak;
       radio.menu_active = false;
+      if (set_spectrum_level)
+      {
+        // restore old level in case it was changed
+        set_spectrum_level = false;
+        radio.level[radio.band] = old_level;
+      }
       if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
       {
         process_key();
