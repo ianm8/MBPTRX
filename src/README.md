@@ -12,3 +12,5 @@ Some history
  * 1.1.240 code cleanup
  * 1.2.240 fix SWR display
  * 1.3.240 graph power and SWR
+ * 1.4.240 set spectrum level
+ * 1.5.240 exit level if TX
