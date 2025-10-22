@@ -13,4 +13,6 @@ Completed PCB:
 
 ![alt text](https://github.com/ianm8/MBPTRX/blob/main/docs/MBPTRX-Boxed.jpg?raw=true)
 
+[![IMAGE ALT TEXT HERE](https://github.com/ianm8/MBPTRX/blob/main/docs/MBPTRX-Short-Video.jpeg)](https://www.youtube.com/watch?v=c6KUVnFJ4gM)
+
 73 VK7IAN
