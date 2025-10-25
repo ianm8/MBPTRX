@@ -7,6 +7,6 @@ All SM resistors are 1206 thick film of at least 125mW except R77 which should b
 All SM capacitors are 1206 NP0 or C0G except for the 22uF and 100uF capacitors.
 
 ## Inductors
-All SM inductors are 1206 for as high SRF as possible (ie, greater than 30MHz).
+All SM inductors are 1206 for as high SRF as possible (ie, greater than 30MHz), except for L23 which has a specific part number.
 
 # Build notes
