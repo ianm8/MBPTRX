@@ -1,3 +1,21 @@
+Libraries
+ *
+ *  https://github.com/Bodmer/TFT_eSPI
+ *
+Important:
+Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI whenever the TFT_eSPI library is installed. Important note, there is a bug in version that requires the following change in TFT_eSPI_RP2040.h:
+
+     #define SET_BUS_READ_MODE  // spi_set_format(SPI_X,  8, (spi_cpol_t)0, (spi_cpha_t)0, SPI_MSB_FIRST)
+
+   that is, comment out: spi_set_format(SPI_X,  8, (spi_cpol_t)0, (spi_cpha_t)0, SPI_MSB_FIRST)
+ 
+Build:
+ *  Pi Pico 2
+ *  CPU Speed: 240Mhz
+ *  Optimize: -O3
+ *  USB Stack: No USB
+ *  Flash Size: 4MB (no FS)
+
 Some history
  * 0.1.240 start with uSBITX and iqSDR40 code
  * 0.2.240 fix read I2C port bug
