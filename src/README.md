@@ -1,7 +1,6 @@
 Libraries
- *
  *  https://github.com/Bodmer/TFT_eSPI
- *
+
 Important:
 Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI whenever the TFT_eSPI library is installed. Important note, there is a bug in version that requires the following change in TFT_eSPI_RP2040.h:
 
