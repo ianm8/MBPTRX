@@ -31,3 +31,7 @@ Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI whenever the TFT_eSPI libr
  * 1.3.240 graph power and SWR
  * 1.4.240 set spectrum level
  * 1.5.240 exit level if TX
+ * 1.6.240 smeter sensitivity higher bands
+ * 1.7.240 change TX frequency colour
+ * 1.8.240 fix CW display position
+ * 2.0.240 AM mode for SWL band
