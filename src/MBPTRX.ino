@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 1.5.240
+ * MBPTRX Version 2.0.240
  *
  * Copyright 2025 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -43,6 +43,10 @@
  *  1.3.240 graph power and SWR
  *  1.4.240 set spectrum level
  *  1.5.240 exit level if TX
+ *  1.6.240 smeter sensitivity higher bands
+ *  1.7.240 change TX frequency colour
+ *  1.8.240 fix CW display position
+ *  2.0.240 AM mode for SWL band
  */
 
 //#define DEBUGGING_SKIP
@@ -70,7 +74,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V1.5."
+#define VERSION_STRING "  V2.0."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -221,7 +225,8 @@ enum radio_mode_t
   MODE_LSB,
   MODE_USB,
   MODE_CWL,
-  MODE_CWU
+  MODE_CWU,
+  MODE_AM
 };
 
 volatile static struct
@@ -239,6 +244,7 @@ volatile static struct
   uint32_t micgain;
   uint32_t bandwidth;
   radio_mode_t mode;
+  bool tx_button;
   bool tx_enable;
   bool keydown;
   bool cessb;
@@ -263,6 +269,7 @@ radio =
   DEFAULT_MICGAIN,
   DEFAULT_BANDWIDTH,
   DEFAULT_MODE,
+  false,
   false,
   false,
   false,
@@ -600,8 +607,16 @@ static void set_frequency(void)
   const uint32_t quadrature_divisor = UTIL::quadrature_divisor(radio.frequency);
   const int32_t ssboffset = radio.tx_enable?0:488;
   const int32_t cwoffset = radio.tx_enable?0:radio.sidetone;
-  const int32_t rx_ssboffset = radio.mode==MODE_LSB?+ssboffset:radio.mode==MODE_USB?-ssboffset:0;
-  const uint32_t rx_cwoffsetw = radio.mode==MODE_CWL?+cwoffset:radio.mode==MODE_CWU?-cwoffset:0u;
+  int32_t rx_ssboffset = 0;
+  int32_t rx_cwoffsetw = 0;
+  switch (radio.mode)
+  {
+    case MODE_LSB: rx_ssboffset = +ssboffset;      break;
+    case MODE_USB: rx_ssboffset = -ssboffset;      break;
+    case MODE_AM:  rx_ssboffset = -(SAMPLERATE/4); break;
+    case MODE_CWL: rx_cwoffsetw = +cwoffset;       break;
+    case MODE_CWU: rx_cwoffsetw = -cwoffset;       break;
+  }
   const uint64_t f = SI5351_FREQ_MULT * (radio.frequency+rx_ssboffset+rx_cwoffsetw);
   const uint64_t p = SI5351_FREQ_MULT * (radio.frequency+rx_ssboffset+rx_cwoffsetw)*quadrature_divisor;
   SI5351.set_freq_manual(f,p,SI5351_CLK0);
@@ -867,6 +882,7 @@ void setup1(void)
 
 static void show_frequency(void)
 {
+  const uint16_t fcolour = radio.tx_enable?LCD_RED:LCD_WHITE;
   char sz_frequency[16] = "";
   memset(sz_frequency,0,sizeof(sz_frequency));
   ultoa(radio.frequency,sz_frequency,10);
@@ -916,7 +932,7 @@ static void show_frequency(void)
     sz_frequency[2] = '.';
   }
   lcd.setTextSize(3);
-  lcd.setTextColor(LCD_WHITE,LCD_BLACK);
+  lcd.setTextColor(fcolour,LCD_BLACK);
   lcd.setCursor(POS_FREQUENCY_X,POS_FREQUENCY_Y);
   lcd.print(sz_frequency);
 }
@@ -1071,16 +1087,16 @@ static void show_swl(void)
 {
   lcd.setTextSize(2);
   lcd.setCursor(POS_TX_X,POS_TX_Y);
-  lcd.setTextColor(LCD_RED);
+  lcd.setTextColor(radio.tx_button?LCD_RED:LCD_GREEN);
   lcd.print("TX");
   lcd.setCursor(POS_RX_X,POS_RX_Y);
-  lcd.setTextColor(LCD_RED);
+  lcd.setTextColor(radio.tx_button?LCD_RED:LCD_GREEN);
   lcd.print("RX");
 }
 
 static void show_rx_tx(void)
 {
-  if (radio.band==BAND_SWL)
+  if ((radio.band==BAND_SWL) || (radio.mode==MODE_AM))
   {
     show_swl();
   }
@@ -1120,6 +1136,7 @@ static void show_mode(void)
       case MODE_USB: sz_mode = "USB"; break;
       case MODE_CWL: sz_mode = "CWL"; break;
       case MODE_CWU: sz_mode = "CWU"; break;
+      case MODE_AM:  sz_mode = "AM";  break;
     }
   }
   lcd.print(sz_mode);
@@ -1293,6 +1310,7 @@ static void show_spectrum(void)
   // show the spectrum
   static const int32_t LSB_OFFSET = -5;
   static const int32_t USB_OFFSET = +5;
+  static const int32_t AM_OFFSET = +45;
   lcd.setTextSize(1);
   lcd.setTextColor(LCD_WHITE);
   lcd.setCursor(0,POS_WATER_Y+4);
@@ -1340,6 +1358,7 @@ static void show_spectrum(void)
   }
   else
   {
+    // receive
     switch (radio.mode)
     {
       case MODE_LSB:
@@ -1358,19 +1377,27 @@ static void show_spectrum(void)
         }
         break;
       }
+      case MODE_AM:
+      {
+        for (uint32_t x=0;x<40;x++)
+        {
+          lcd.drawLine(POS_CENTER_RIGHT+x+AM_OFFSET,POS_WATER_Y,POS_CENTER_RIGHT+x+AM_OFFSET,POS_WATER_Y+31,LCD_MODE);
+        }
+        break;
+      }
       case MODE_CWL:
       {
-        for (uint32_t x=0;x<5;x++)
+        for (uint32_t x=0;x<10;x++)
         {
-          lcd.drawLine(POS_CENTER_LEFT-x-5,POS_WATER_Y,POS_CENTER_LEFT-x-5,POS_WATER_Y+31,LCD_MODE);
+          lcd.drawLine(POS_CENTER_LEFT-x,POS_WATER_Y,POS_CENTER_LEFT-x,POS_WATER_Y+31,LCD_MODE);
         }
         break;
       }
       case MODE_CWU:
       {
-        for (uint32_t x=0;x<5;x++)
+        for (uint32_t x=0;x<10;x++)
         {
-          lcd.drawLine(POS_CENTER_RIGHT+x-5,POS_WATER_Y,POS_CENTER_RIGHT+x-5,POS_WATER_Y+31,LCD_MODE);
+          lcd.drawLine(POS_CENTER_RIGHT+x,POS_WATER_Y,POS_CENTER_RIGHT+x,POS_WATER_Y+31,LCD_MODE);
         }
         break;
       }
@@ -1842,6 +1869,7 @@ void __not_in_flash_func(loop)(void)
           {
             case MODE_LSB: dac_audio = DSP::process_ssb(qq,ii,jnr,bw); break;
             case MODE_USB: dac_audio = DSP::process_ssb(ii,qq,jnr,bw); break;
+            case MODE_AM:  dac_audio = DSP::process_am(ii,qq,jnr);     break;
             case MODE_CWL: dac_audio = DSP::process_cw(qq,ii);         break;
             case MODE_CWU: dac_audio = DSP::process_cw(ii,qq);         break;
           }
@@ -2071,6 +2099,10 @@ static const radio_mode_t get_mode_auto(void)
   {
     return radio.mode;
   }
+  if (radio.band==BAND_SWL)
+  {
+    return MODE_AM;
+  }
   if (radio.frequency<10000000ul)
   {
     if (radio.frequency==7074000ul)
@@ -2131,6 +2163,7 @@ void loop1(void)
         case OPTION_MODE_USB:       radio.mode = MODE_USB; radio.mode_auto = false; break;
         case OPTION_MODE_CWL:       radio.mode = MODE_CWL; radio.mode_auto = false; break;
         case OPTION_MODE_CWU:       radio.mode = MODE_CWU; radio.mode_auto = false; break;
+        case OPTION_MODE_AM:        radio.mode = MODE_AM;  radio.mode_auto = false; break;
         case OPTION_MODE_AUTO:      radio.mode_auto = true;                         break;
         case OPTION_STEP_10:        radio.step = 10U;                               break;
         case OPTION_STEP_100:       radio.step = 100U;                              break;
@@ -2449,46 +2482,48 @@ void loop1(void)
   if (now>next_update)
   {
     next_update = now + 50ul;
-    update_display(DSP::smeter());
+    update_display(DSP::smeter(radio.frequency));
   }
 
   // check for PTT
-  if (radio.band != BAND_SWL)
+  const bool b_PTT = (digitalRead(PIN_PTT)==LOW);
+  const bool b_PADA = (digitalRead(PIN_PADA)==LOW);
+  const bool b_PADB = (digitalRead(PIN_PADB)==LOW);
+  radio.tx_button = (b_PTT || b_PADA || b_PADB);
+  if ((radio.band == BAND_SWL) || (radio.mode == MODE_AM))
   {
-    const bool b_PTT = (digitalRead(PIN_PTT)==LOW);
-    const bool b_PADA = (digitalRead(PIN_PADA)==LOW);
-    const bool b_PADB = (digitalRead(PIN_PADB)==LOW);
-    if (b_PTT || b_PADA || b_PADB)
+    return;
+  }
+  if (radio.tx_button)
+  {
+    const float saved_agc = DSP::agc_peak;
+    radio.menu_active = false;
+    if (set_spectrum_level)
     {
-      const float saved_agc = DSP::agc_peak;
-      radio.menu_active = false;
-      if (set_spectrum_level)
-      {
-        // restore old level in case it was changed
-        set_spectrum_level = false;
-        radio.level[radio.band] = old_level;
-      }
-      if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
-      {
-        process_key();
-      }
-      else if (b_PTT)
-      {
-        process_ssb_tx();
-      }
-
-      // back to receive
-      lpf_port.output(I2C_PIN_TXENABLE,TCA9534::Level::L);
-      delay(50);
-      radio.tx_enable = false;
-      digitalWrite(PIN_TXBIAS,LOW);
-      bpf_port.output(I2C_PIN_TXN,TCA9534::Level::H);
-      bpf_port.output(I2C_PIN_RXN,TCA9534::Level::L);
-      set_frequency();
-      update_display();
-      unmute();
-      digitalWrite(LED_BUILTIN,LOW);
-      DSP::agc_peak = saved_agc;
+      // restore old level in case it was changed
+      set_spectrum_level = false;
+      radio.level[radio.band] = old_level;
     }
+    if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
+    {
+      process_key();
+    }
+    else if (b_PTT)
+    {
+      process_ssb_tx();
+    }
+
+    // back to receive
+    lpf_port.output(I2C_PIN_TXENABLE,TCA9534::Level::L);
+    delay(50);
+    radio.tx_enable = false;
+    digitalWrite(PIN_TXBIAS,LOW);
+    bpf_port.output(I2C_PIN_TXN,TCA9534::Level::H);
+    bpf_port.output(I2C_PIN_RXN,TCA9534::Level::L);
+    set_frequency();
+    update_display();
+    unmute();
+    digitalWrite(LED_BUILTIN,LOW);
+    DSP::agc_peak = saved_agc;
   }
 }

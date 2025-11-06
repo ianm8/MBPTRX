@@ -33,10 +33,36 @@ namespace DSP
     return (int16_t)(in*fminf(m,max_gain));
   }
 
-  static const uint8_t __not_in_flash_func(smeter)(void)
+  static const uint8_t __not_in_flash_func(smeter)(const uint32_t f)
   {
     // S9 = -73dBm = 141uV PP
     // need to return 10 for S9
+    const bool hiband = (f > 15000000ul);
+    if (hiband)
+    {
+      static const float hiadjust = 4.0f;
+      static const float S0_sig = 100.0f / hiadjust;
+      static const float S9_sig = 300.0f / hiadjust;
+      static const float S9p_sig = 8192.0f/ hiadjust;
+      static const uint32_t S9_from_min = (uint32_t)(log10f(S0_sig) * 1024.0f);
+      static const uint32_t S9_from_max = (uint32_t)(log10f(S9_sig) * 1024.0f);
+      static const uint32_t S9_min = 0ul;
+      static const uint32_t S9_max = 10ul;
+      static const uint32_t S9p_from_min = (uint32_t)(log10f(S9_sig) * 1024.0f);
+      static const uint32_t S9p_from_max = (uint32_t)(log10f(S9p_sig) * 1024.0f);
+      static const uint32_t S9p_min = 11ul;
+      static const uint32_t S9p_max = 15ul;
+      if (agc_peak<1.0f)
+      {
+        return 0u;
+      }
+      const uint32_t log_peak = (uint32_t)(log10f(agc_peak) * 1024.0f);
+      if (agc_peak>S9_sig)
+      {
+        return (uint8_t)UTIL::map(log_peak,S9p_from_min,S9p_from_max,S9p_min,S9p_max);
+      }
+      return (uint8_t)UTIL::map(log_peak,S9_from_min,S9_from_max,S9_min,S9_max);
+    }
     static const float S0_sig = 100.0f;
     static const float S9_sig = 300.0f;
     static const float S9p_sig = 8192.0f;
@@ -103,7 +129,6 @@ namespace DSP
 
     // JNR
     const float audio_out = FILTER::jnr(audio_raw,jnr_level);
-    //const float audio_out = FILTER::jnr(audio_lpf,jnr_level);
 
     // AGC returns 12 bit value
     return agc(audio_out * 32768.0f);
@@ -127,6 +152,51 @@ namespace DSP
 
     // AGC returns 12 bit value
     return agc(audio_out * 32768.0f);
+  }
+
+  static const int16_t __not_in_flash_func(process_am)(const int16_t in_i,const int16_t in_q,const uint32_t jnr_level)
+  {
+    // BPF I with +45 phase shift
+    // BPF Q with -45 phase shift
+    // SUM (USB)
+    // ABS
+    // AGC
+    // LPF
+    // Remove DC
+
+    // AGC settings
+    static const float max_gain = 40.0f;
+    static const float k = 0.99996f;
+
+    // extract AM signal from USB @ FS/4
+    const float ii = FILTER::bpf_45p((float)in_i / 32768.0f);
+    const float qq = FILTER::bpf_45n((float)in_q / 32768.0f);
+    const float am = ii + qq;
+    const float rectified = fabsf(am);
+
+    // AGC
+    const float agc_magnitude = rectified * 32768.0f;
+    if (agc_magnitude > agc_peak)
+    {
+      agc_peak = agc_magnitude;
+    }
+    else
+    {
+      agc_peak *= k;
+    }
+
+    // set maximum gain possible for 12 bit DAC
+    float gain = max_gain;
+    if (agc_peak > 1.0f)
+    {
+      gain = 2047.0f / agc_peak;
+    }
+    gain = fminf(gain, max_gain);
+
+    // extract audio from rectified AM signal
+    const float audio_raw = FILTER::dcf(FILTER::lpf_3000f(rectified));
+    const float audio_out = FILTER::jnr(audio_raw,jnr_level);
+    return (int16_t)(audio_out * 32768.0f * gain);
   }
 
   static const uint32_t __not_in_flash_func(get_mic_peak_level)(const int16_t mic_in)
@@ -166,7 +236,7 @@ namespace DSP
     qq = FILTER::lpf_2600qf_tx(qq / mag_max);
   }
 
-  const void __not_in_flash_func(process_mic)(const int16_t s,int16_t &out_i,int16_t &out_q,const float mic_gain,const bool cessb_on)
+  static const void __not_in_flash_func(process_mic)(const int16_t s,int16_t &out_i,int16_t &out_q,const float mic_gain,const bool cessb_on)
   {
     // input is 12 bits
     // convert to float
