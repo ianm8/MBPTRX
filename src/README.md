@@ -35,3 +35,4 @@ Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI whenever the TFT_eSPI libr
  * 1.7.240 change TX frequency colour
  * 1.8.240 fix CW display position
  * 2.0.240 AM mode for SWL band
+ * 2.1.240 improved AM demodulation
