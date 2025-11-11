@@ -171,11 +171,12 @@ namespace DSP
     // extract AM signal from USB @ FS/4
     const float ii = FILTER::bpf_45p((float)in_i / 32768.0f);
     const float qq = FILTER::bpf_45n((float)in_q / 32768.0f);
-    const float am = ii + qq;
-    const float rectified = fabsf(am);
+    const float ssb = ii + qq;
+    const float magnitude = fabsf(ssb);
+    const float rectified = ssb * ssb;
 
     // AGC
-    const float agc_magnitude = rectified * 32768.0f;
+    const float agc_magnitude = magnitude * 32768.0f;
     if (agc_magnitude > agc_peak)
     {
       agc_peak = agc_magnitude;
@@ -194,7 +195,7 @@ namespace DSP
     gain = fminf(gain, max_gain);
 
     // extract audio from rectified AM signal
-    const float audio_raw = FILTER::dcf(FILTER::lpf_3000f(rectified));
+    const float audio_raw = FILTER::dcf(sqrtf(fabsf(FILTER::lpf_3000f(rectified))));
     const float audio_out = FILTER::jnr(audio_raw,jnr_level);
     return (int16_t)(audio_out * 32768.0f * gain);
   }

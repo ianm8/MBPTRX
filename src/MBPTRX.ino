@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 2.0.240
+ * MBPTRX Version 2.1.240
  *
  * Copyright 2025 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -47,6 +47,7 @@
  *  1.7.240 change TX frequency colour
  *  1.8.240 fix CW display position
  *  2.0.240 AM mode for SWL band
+ *  2.1.240 improved AM demodulation
  */
 
 //#define DEBUGGING_SKIP
@@ -74,7 +75,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V2.0."
+#define VERSION_STRING "  V2.1."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
