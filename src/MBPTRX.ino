@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 2.1.240
+ * MBPTRX Version 2.3.240
  *
  * Copyright 2025 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -48,14 +48,16 @@
  *  1.8.240 fix CW display position
  *  2.0.240 AM mode for SWL band
  *  2.1.240 improved AM demodulation
+ *  2.2.240 include modified TFT_eSPI library
+ *  2.3.240 fix TFT display initialisation
  */
 
 //#define DEBUGGING_SKIP
 
 #include <SPI.h>
 #include <EEPROM.h>
-#include <TFT_eSPI.h>
 #include <I2S.h>
+#include "TFT_eSPI.h"
 #include "util.h"
 #include "si5351.h"
 #include "mcp3021.h"
@@ -75,7 +77,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V2.1."
+#define VERSION_STRING "  V2.3."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -526,8 +528,9 @@ static void init_adc(void)
 
 static void init_i2s(void)
 {
+  // Note: LRCLK = BCLK + 1
   i2s.setDATA(PIN_DOUT);
-  i2s.setBCLK(PIN_BCLK); // Note: LRCLK = BCLK + 1
+  i2s.setBCLK(PIN_BCLK);
   i2s.setMCLK(PIN_MCLK);
   i2s.setBitsPerSample(32);
   i2s.setFrequency(SAMPLERATE);
@@ -817,6 +820,7 @@ void setup(void)
   tft.init();
   tft.setRotation(1);
   tft.fillScreen(LCD_BLACK);
+  tft.displayOn();
   lcd.createSprite(LCD_WIDTH, LCD_HEIGHT);
   lcd.fillSprite(LCD_BLACK);
   lcd.pushSprite(0,0);
