@@ -1,5 +1,7 @@
 ## Libraries
- *  https://github.com/Bodmer/TFT_eSPI
+ *  ~~https://github.com/Bodmer/TFT_eSPI~~
+ *  A modified version of this library is now included
+ *  This version adds a **displayOn()** function so that the display can be initialised and cleared before being switched on
 
 Important:
 Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI whenever the TFT_eSPI library is installed. Important note, there is a bug in version that requires the following change in TFT_eSPI_RP2040.h:
@@ -36,3 +38,6 @@ Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI whenever the TFT_eSPI libr
  * 1.8.240 fix CW display position
  * 2.0.240 AM mode for SWL band
  * 2.1.240 improved AM demodulation
+ * 2.2.240 include modified TFT_eSPI library
+ * 2.3.240 fix TFT display initialisation
+
