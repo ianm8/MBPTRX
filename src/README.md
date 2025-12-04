@@ -1,6 +1,7 @@
 ## Libraries
  *  ~~https://github.com/Bodmer/TFT_eSPI~~
  *  A modified version of this library is now included
+ *  Install the TFT_eSPI2 library provided in the **release** files
  *  This version adds a **displayOn()** function so that the display can be initialised and cleared before being switched on
 
 Important:
