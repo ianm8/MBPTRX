@@ -41,4 +41,5 @@ Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI whenever the TFT_eSPI libr
  * 2.1.240 improved AM demodulation
  * 2.2.240 include modified TFT_eSPI library
  * 2.3.240 fix TFT display initialisation
+ * 2.4.240 separate modified TFT_eSPI2 library
 
