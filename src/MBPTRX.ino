@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 2.3.240
+ * MBPTRX Version 2.4.240
  *
  * Copyright 2025 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -50,6 +50,7 @@
  *  2.1.240 improved AM demodulation
  *  2.2.240 include modified TFT_eSPI library
  *  2.3.240 fix TFT display initialisation
+ *  2.4.240 separate modified TFT_eSPI library
  */
 
 //#define DEBUGGING_SKIP
@@ -57,7 +58,7 @@
 #include <SPI.h>
 #include <EEPROM.h>
 #include <I2S.h>
-#include "TFT_eSPI.h"
+#include <TFT_eSPI2.h>
 #include "util.h"
 #include "si5351.h"
 #include "mcp3021.h"
@@ -77,7 +78,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V2.3."
+#define VERSION_STRING "  V2.4."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
