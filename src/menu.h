@@ -192,7 +192,7 @@ menu_options[NUM_MENU_ITEMS] =
   {
     MENU_JNR,
     "JNR",
-    4U,
+    5U,
     {
       {OPTION_JNR_LEVEL1,"Level 1"},
       {OPTION_JNR_LEVEL2,"Level 2"},
