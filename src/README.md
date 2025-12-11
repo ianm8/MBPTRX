@@ -3,13 +3,6 @@
  *  A modified version of this library is now included
  *  Install the TFT_eSPI2 library provided in the **release** files
  *  This version adds a **displayOn()** function so that the display can be initialised and cleared before being switched on
-
-Important:
-Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI whenever the TFT_eSPI library is installed. Important note, there is a bug in version that requires the following change in TFT_eSPI_RP2040.h:
-
-     #define SET_BUS_READ_MODE  // spi_set_format(SPI_X,  8, (spi_cpol_t)0, (spi_cpha_t)0, SPI_MSB_FIRST)
-
-   that is, comment out: spi_set_format(SPI_X,  8, (spi_cpol_t)0, (spi_cpha_t)0, SPI_MSB_FIRST)
  
 ## Build
  *  Pi Pico 2
