@@ -36,4 +36,7 @@
  * 2.3.240 fix TFT display initialisation
  * 2.4.240 separate modified TFT_eSPI2 library
  * 2.5.240 add exit option to JNR menu
+ * 2.6.240 noise blanker
+ * 2.7.240 TX/RX transition glitch
+ * 2.8.240 reposition status info
 
