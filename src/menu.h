@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 14U
+#define NUM_MENU_ITEMS 15U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -46,6 +46,7 @@ enum menu_top_t
   MENU_SIDETONE_LEVEL,
   MENU_SPECTRUM_TYPE,
   MENU_JNR,
+  MENU_NB,
   MENU_MIC,
   MENU_CESSB,
   MENU_GRAPH_SWR,
@@ -107,6 +108,11 @@ enum option_value_t
   OPTION_JNR_LEVEL1,
   OPTION_JNR_LEVEL2,
   OPTION_JNR_LEVEL3,
+  OPTION_NB_OFF,
+  OPTION_NB_LEVEL1,
+  OPTION_NB_LEVEL2,
+  OPTION_NB_LEVEL3,
+  OPTION_NB_LEVEL4,
   OPTION_MIC_25,
   OPTION_MIC_50,
   OPTION_MIC_75,
@@ -200,6 +206,23 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_JNR_OFF,"Off"},
       {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
+    }
+  },
+  {
+    MENU_NB,
+    "Blanker",
+    6U,
+    {
+      {OPTION_NB_LEVEL1,"Level 1"},
+      {OPTION_NB_LEVEL2,"Level 2"},
+      {OPTION_NB_LEVEL3,"Level 3"},
+      {OPTION_NB_LEVEL4,"Level 4"},
+      {OPTION_NB_OFF,"Off"},
+      {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},

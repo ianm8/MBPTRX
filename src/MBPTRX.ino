@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 2.5.240
+ * MBPTRX Version 2.8.240
  *
  * Copyright 2025 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -52,6 +52,9 @@
  *  2.3.240 fix TFT display initialisation
  *  2.4.240 separate modified TFT_eSPI library
  *  2.5.240 add exit option to JNR menu
+ *  2.6.240 noise blanker
+ *  2.7.240 TX/RX transition glitch
+ *  2.8.240 reposition status info
  */
 
 //#define DEBUGGING_SKIP
@@ -79,7 +82,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V2.5."
+#define VERSION_STRING "  V2.8."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -203,6 +206,11 @@
 #define JNR_LEVEL1         1u
 #define JNR_LEVEL2         2u
 #define JNR_LEVEL3         3u
+#define NB_OFF             0u
+#define NB_LEVEL1          1u
+#define NB_LEVEL2          2u
+#define NB_LEVEL3          3u
+#define NB_LEVEL4          4u
 
 #if PIN_MIC == 26U
 #define MIC_MUX 0U
@@ -246,6 +254,7 @@ volatile static struct
   uint32_t cw_phase;
   uint32_t spectype;
   uint32_t jnrlevel;
+  uint32_t nblevel;
   uint32_t micgain;
   uint32_t bandwidth;
   radio_mode_t mode;
@@ -271,6 +280,7 @@ radio =
   (uint32_t)(((uint64_t)DEFAULT_SIDETONE * (1ull << 32)) / SAMPLERATE),
   SPECTRUM_WIND,
   JNR_OFF,
+  NB_OFF,
   DEFAULT_MICGAIN,
   DEFAULT_BANDWIDTH,
   DEFAULT_MODE,
@@ -1296,10 +1306,12 @@ static void show_cessb_settings(void)
       lcd.setCursor(POS_CESSB_MIC_X,POS_CESSB_MIC_Y);
       lcd.print("CESSB:");
       lcd.print(radio.cessb?"On":"Off");
-      lcd.print("  Mic:");
+      lcd.setCursor(POS_CESSB_MIC_X+58,POS_CESSB_MIC_Y);
+      lcd.print("Mic:");
       lcd.print(radio.micgain);
       lcd.print("%");
-      lcd.print("  BW:");
+      lcd.setCursor(POS_CESSB_MIC_X+110,POS_CESSB_MIC_Y);
+      lcd.print("BW:");
       switch (radio.bandwidth)
       {
         case 1: lcd.print("2000Hz"); break;
@@ -1307,6 +1319,15 @@ static void show_cessb_settings(void)
         case 3: lcd.print("2400Hz"); break;
         case 4: lcd.print("2600Hz"); break;
         case 5: lcd.print("2800Hz"); break;
+      }
+      lcd.setCursor(POS_CESSB_MIC_X+168,POS_CESSB_MIC_Y);
+      switch (radio.nblevel)
+      {
+        case 0: lcd.print("NB0"); break;
+        case 1: lcd.print("NB1"); break;
+        case 2: lcd.print("NB2"); break;
+        case 3: lcd.print("NB3"); break;
+        case 4: lcd.print("NB4"); break;
       }
     }
   }
@@ -1871,14 +1892,15 @@ void __not_in_flash_func(loop)(void)
           adc_sample_p &= (MAX_ADC_SAMPLES-1);
           int32_t dac_audio = 0;
           const uint8_t jnr = radio.jnrlevel;
+          const uint8_t nb = radio.nblevel;
           const uint8_t bw = radio.bandwidth - 1;
           switch (radio.mode)
           {
-            case MODE_LSB: dac_audio = DSP::process_ssb(qq,ii,jnr,bw); break;
-            case MODE_USB: dac_audio = DSP::process_ssb(ii,qq,jnr,bw); break;
-            case MODE_AM:  dac_audio = DSP::process_am(ii,qq,jnr);     break;
-            case MODE_CWL: dac_audio = DSP::process_cw(qq,ii);         break;
-            case MODE_CWU: dac_audio = DSP::process_cw(ii,qq);         break;
+            case MODE_LSB: dac_audio = DSP::process_ssb(qq,ii,jnr,bw,nb); break;
+            case MODE_USB: dac_audio = DSP::process_ssb(ii,qq,jnr,bw,nb); break;
+            case MODE_AM:  dac_audio = DSP::process_am(ii,qq,jnr);        break;
+            case MODE_CWL: dac_audio = DSP::process_cw(qq,ii);            break;
+            case MODE_CWU: dac_audio = DSP::process_cw(ii,qq);            break;
           }
           dac_audio = constrain(dac_audio,-2048l,+2047l);
           dac_audio += 2048l;
@@ -2216,6 +2238,11 @@ void loop1(void)
         case OPTION_JNR_LEVEL2:     radio.jnrlevel = JNR_LEVEL2;                    break;
         case OPTION_JNR_LEVEL3:     radio.jnrlevel = JNR_LEVEL3;                    break;
         case OPTION_JNR_OFF:        radio.jnrlevel = JNR_OFF;                       break;
+        case OPTION_NB_LEVEL1:      radio.nblevel = NB_LEVEL1;                      break;
+        case OPTION_NB_LEVEL2:      radio.nblevel = NB_LEVEL2;                      break;
+        case OPTION_NB_LEVEL3:      radio.nblevel = NB_LEVEL3;                      break;
+        case OPTION_NB_LEVEL4:      radio.nblevel = NB_LEVEL4;                      break;
+        case OPTION_NB_OFF:         radio.nblevel = NB_OFF;                         break;
         case OPTION_MIC_25:         radio.micgain = 25;                             break;
         case OPTION_MIC_50:         radio.micgain = 50;                             break;
         case OPTION_MIC_75:         radio.micgain = 75;                             break;
@@ -2481,7 +2508,11 @@ void loop1(void)
   unmute();
 
   // process spectrum
-  process_spectrum();
+  static uint32_t process_spectrum_txrx = 0;
+  if (millis()>process_spectrum_txrx)
+  {
+    process_spectrum();
+  }
 
   // update the display every 50ms
   static uint32_t next_update = 0;
@@ -2521,6 +2552,8 @@ void loop1(void)
     }
 
     // back to receive
+    memset(magnitude,0,sizeof(magnitude));
+    process_spectrum_txrx = millis()+200;
     lpf_port.output(I2C_PIN_TXENABLE,TCA9534::Level::L);
     delay(50);
     radio.tx_enable = false;

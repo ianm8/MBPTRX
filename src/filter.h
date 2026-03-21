@@ -1767,7 +1767,7 @@ namespace FILTER
     __mac_tap(-0.000021f);
     return acc;
   }
-
+  
   static const float __not_in_flash_func(lpf_2600if_tx)(const float sample)
   {
     // 31250

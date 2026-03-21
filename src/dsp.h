@@ -86,7 +86,72 @@ namespace DSP
     return (uint8_t)UTIL::map(log_peak,S9_from_min,S9_from_max,S9_min,S9_max);
   }
 
-  static const int16_t __not_in_flash_func(process_ssb)(const int16_t in_i,const int16_t in_q,const uint32_t jnr_level,const uint8_t bw)
+  static void __not_in_flash_func(noise_blanker)(float &I, float &Q, const uint8_t level)
+  {
+    static const int MAX_BLANK_RUN = 32; // ~1ms at 31250 Hz
+    static const float alpha = 0.002f;   // ~16ms at 31250 Hz
+
+    // threasholds, number of times greater than
+    // average to trigger a blanking event
+    static const float thresholds[] =
+    {
+      0.0f,   // level 0 — unused (returns early)
+      20.0f,  // level 1 — conservative, only very large spikes
+      10.0f,  // level 2 — moderate
+      6.0f,   // level 3 — fairly aggressive
+      3.0f    // level 4 — maximum blanking
+    };
+    if (level == 0) return;
+    if (level > 4) return;
+    const float threshold = thresholds[level];
+
+    static struct
+    {
+      float lastI;
+      float lastQ;
+      float avg_amp;
+      uint32_t blank_run;
+      uint32_t initialized;
+    } s = {0};
+
+    if (s.initialized==0)
+    {
+      s.lastI = I;
+      s.lastQ = Q;
+      s.avg_amp = 0.01f;
+      s.blank_run = 0;
+      s.initialized = 1;
+    }
+
+    // instantaneous amplitude (fast estimate)
+    const float amp = fabsf(I) + fabsf(Q);
+    const bool blanked = (amp > threshold * s.avg_amp) && (s.blank_run < MAX_BLANK_RUN);
+    if (blanked)
+    {
+      s.blank_run++;
+
+      // hold last good sample
+      I = s.lastI;
+      Q = s.lastQ;
+    }
+    else
+    {
+      // track signal envelope
+      s.avg_amp += alpha * (amp - s.avg_amp);
+      s.blank_run = 0;
+      
+      // save last good sample
+      s.lastI = I;
+      s.lastQ = Q;
+    }
+  } 
+
+  static const int16_t __not_in_flash_func(process_ssb)(
+      const int16_t in_i,
+      const int16_t in_q,
+      const uint32_t jnr_level,
+      const uint8_t bw,
+      const uint8_t nb_level)
   {
     // quadrature mixer
 
@@ -103,8 +168,11 @@ namespace DSP
     lo++;
 
     // remove DC
-    const float ii = FILTER::dc1f((float)in_i / 32768.0f);
-    const float qq = FILTER::dc2f((float)in_q / 32768.0f);
+    float ii = FILTER::dc1f((float)in_i / 32768.0f);
+    float qq = FILTER::dc2f((float)in_q / 32768.0f);
+
+    // noise blanker
+    noise_blanker(ii,qq,nb_level);
 
     // quadrature down-convert
     const float a = ii * loQ;
