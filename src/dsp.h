@@ -88,21 +88,22 @@ namespace DSP
 
   static void __not_in_flash_func(noise_blanker)(float &I, float &Q, const uint8_t level)
   {
-    static const int MAX_BLANK_RUN = 32; // ~1ms at 31250 Hz
-    static const float alpha = 0.002f;   // ~16ms at 31250 Hz
+    static const uint32_t MAX_BLANK_RUN = 32; // ~1ms at 31250 Hz
+    static const float alpha = 0.002f;        // ~16ms at 31250 Hz
 
     // threasholds, number of times greater than
     // average to trigger a blanking event
     static const float thresholds[] =
     {
-      0.0f,   // level 0 — unused (returns early)
-      20.0f,  // level 1 — conservative, only very large spikes
-      10.0f,  // level 2 — moderate
-      6.0f,   // level 3 — fairly aggressive
-      3.0f    // level 4 — maximum blanking
+      0.0f,  // level 0 — unused (returns early)
+      9.0f,  // level 1 — only very large spikes
+      7.0f,  // level 2 — conservative
+      5.0f,  // level 3 — moderate
+      3.0f,  // level 4 — fairly aggressive
+      2.0f   // level 5 — maximum blanking
     };
     if (level == 0) return;
-    if (level > 4) return;
+    if (level > 5) return;
     const float threshold = thresholds[level];
 
     static struct
@@ -297,6 +298,30 @@ namespace DSP
     return mic_peak_level;
   }
 
+  static float __not_in_flash_func(mic_process)(const float sample, const uint8_t level)
+  {
+    // use tanh for soft clipping
+
+    if (level == 0) return sample;
+    if (level > 5) return sample;
+
+    // drive values mapped to processing levels 1–5
+    // level 0 = bypass (filter state is left untouched)
+    static const float DRIVE_TABLE[6] =
+    {
+      0.0f,   // 0 — bypass
+      1.5f,   // 1 — subtle warmth
+      3.0f,   // 2 — light SSB processing
+      5.0f,   // 3 — typical SSB (good starting point)
+      7.5f,   // 4 — aggressive
+      12.0f,  // 5 — contest/heavy
+    };
+  
+    const float drive = DRIVE_TABLE[level];
+    const float clipped = tanhf(sample * drive) / tanhf(drive);
+    return clipped;
+  }
+
   static void __not_in_flash_func(cessb)(float& ii, float& qq)
   {
     const float mag_raw = sqrtf(ii*ii + qq*qq);
@@ -305,25 +330,31 @@ namespace DSP
     qq = FILTER::lpf_2600qf_tx(qq / mag_max);
   }
 
-  static const void __not_in_flash_func(process_mic)(const int16_t s,int16_t &out_i,int16_t &out_q,const float mic_gain,const bool cessb_on)
+  static const void __not_in_flash_func(process_mic)(
+    const int16_t s,
+    int16_t &out_i,
+    int16_t &out_q,
+    const float mic_gain,
+    const uint8_t proc_level,
+    const bool cessb_on)
   {
     // input is 12 bits
     // convert to float
     // remove Mic DC
+    // mic processing
     // 2400 LPF 
     // phase shift I
     // phase shift Q
     // convert to int
     // output is 10 bits
-    const float ac_sig = FILTER::dcf(((float)s)*(1.0f/2048.0f));
-    const float mic_sig = FILTER::lpf_2600f_tx(ac_sig);
-    const float ii1 = FILTER::fap1f(mic_sig);
-    const float qq1 = FILTER::fap2f(mic_sig);
-    float ii2 = ii1 * mic_gain;
-    float qq2 = qq1 * mic_gain;
-    if (cessb_on) cessb(ii2,qq2);
-    out_i = (int16_t)(ii2 * 512.0f);
-    out_q = (int16_t)(qq2 * 512.0f);
+    const float ac_sig = FILTER::dcf(((float)s)*(1.0f/2048.0f)) * mic_gain;
+    const float mic_proc = mic_process(ac_sig,proc_level);
+    const float mic_sig = FILTER::lpf_2600f_tx(mic_proc);
+    float ii = FILTER::fap1f(mic_sig);
+    float qq = FILTER::fap2f(mic_sig);
+    if (cessb_on) cessb(ii,qq);
+    out_i = (int16_t)(ii * 512.0f);
+    out_q = (int16_t)(qq * 512.0f);
   }
 }
 

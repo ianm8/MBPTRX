@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 15U
+#define NUM_MENU_ITEMS 16U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -48,6 +48,7 @@ enum menu_top_t
   MENU_JNR,
   MENU_NB,
   MENU_MIC,
+  MENU_MIC_PROC,
   MENU_CESSB,
   MENU_GRAPH_SWR,
   MENU_GAUSSIAN,
@@ -113,6 +114,7 @@ enum option_value_t
   OPTION_NB_LEVEL2,
   OPTION_NB_LEVEL3,
   OPTION_NB_LEVEL4,
+  OPTION_NB_LEVEL5,
   OPTION_MIC_25,
   OPTION_MIC_50,
   OPTION_MIC_75,
@@ -121,6 +123,12 @@ enum option_value_t
   OPTION_MIC_150,
   OPTION_MIC_175,
   OPTION_MIC_200,
+  OPTION_MIC_PROC_OFF,
+  OPTION_MIC_PROC1,
+  OPTION_MIC_PROC2,
+  OPTION_MIC_PROC3,
+  OPTION_MIC_PROC4,
+  OPTION_MIC_PROC5,
   OPTION_CESSB_ON,
   OPTION_CESSB_OFF,
   OPTION_GRAPH_SWR_Y,
@@ -215,15 +223,15 @@ menu_options[NUM_MENU_ITEMS] =
   {
     MENU_NB,
     "Blanker",
-    6U,
+    7U,
     {
       {OPTION_NB_LEVEL1,"Level 1"},
       {OPTION_NB_LEVEL2,"Level 2"},
       {OPTION_NB_LEVEL3,"Level 3"},
       {OPTION_NB_LEVEL4,"Level 4"},
+      {OPTION_NB_LEVEL5,"Level 5"},
       {OPTION_NB_OFF,"Off"},
       {OPTION_EXIT,"Exit"},
-      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
@@ -328,6 +336,23 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_MIC_175,"Gain 175%"},
       {OPTION_MIC_200,"Gain 200%"},
       {OPTION_EXIT,"Exit"},
+    }
+  },
+  {
+    MENU_MIC_PROC,
+    "Mic Proc",
+    7U,
+    {
+      {OPTION_MIC_PROC1,"Level 1"},
+      {OPTION_MIC_PROC2,"Level 2"},
+      {OPTION_MIC_PROC3,"Level 3"},
+      {OPTION_MIC_PROC4,"Level 4"},
+      {OPTION_MIC_PROC5,"Level 5"},
+      {OPTION_MIC_PROC_OFF,"Off"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
     }
   },
   {

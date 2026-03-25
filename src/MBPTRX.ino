@@ -1,7 +1,7 @@
 /*
- * MBPTRX Version 2.8.240
+ * MBPTRX Version 3.0.240
  *
- * Copyright 2025 Ian Mitchell VK7IAN
+ * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
  *
  * Libraries
@@ -55,6 +55,8 @@
  *  2.6.240 noise blanker
  *  2.7.240 TX/RX transition glitch
  *  2.8.240 reposition status info
+ *  2.9.240 tweak noise blanker
+ *  3.0.240 mic processor
  */
 
 //#define DEBUGGING_SKIP
@@ -82,7 +84,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V2.8."
+#define VERSION_STRING "  V3.0."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -105,6 +107,7 @@
 #define DEFAULT_SIDETONE 700ul
 #define DEFAULT_CW_LEVEL 2ul
 #define DEFAULT_MICGAIN 100ul
+#define DEFAULT_MICPROC 0ul
 #define DEFAULT_BANDWIDTH 3ul
 #define BUTTON_LONG_PRESS_TIME 800ul
 #define TCXO_FREQ 27000021ul
@@ -211,6 +214,13 @@
 #define NB_LEVEL2          2u
 #define NB_LEVEL3          3u
 #define NB_LEVEL4          4u
+#define NB_LEVEL5          5u
+#define MIC_PROC1          1u
+#define MIC_PROC2          2u
+#define MIC_PROC3          3u
+#define MIC_PROC4          4u
+#define MIC_PROC5          5u
+#define MIC_PROC_OFF       0u
 
 #if PIN_MIC == 26U
 #define MIC_MUX 0U
@@ -256,6 +266,7 @@ volatile static struct
   uint32_t jnrlevel;
   uint32_t nblevel;
   uint32_t micgain;
+  uint32_t micproc;
   uint32_t bandwidth;
   radio_mode_t mode;
   bool tx_button;
@@ -282,6 +293,7 @@ radio =
   JNR_OFF,
   NB_OFF,
   DEFAULT_MICGAIN,
+  DEFAULT_MICPROC,
   DEFAULT_BANDWIDTH,
   DEFAULT_MODE,
   false,
@@ -1307,9 +1319,20 @@ static void show_cessb_settings(void)
       lcd.print("CESSB:");
       lcd.print(radio.cessb?"On":"Off");
       lcd.setCursor(POS_CESSB_MIC_X+58,POS_CESSB_MIC_Y);
-      lcd.print("Mic:");
-      lcd.print(radio.micgain);
-      lcd.print("%");
+      if (radio.micproc==0)
+      {
+        lcd.print("Mic:");
+        lcd.print(radio.micgain);
+        lcd.print("%");
+      }
+      else
+      {
+        lcd.setTextColor(LCD_RED);
+        lcd.print("Mic:");
+        lcd.print(radio.micproc);
+        lcd.print("P");
+        lcd.setTextColor(LCD_GREEN);
+      }
       lcd.setCursor(POS_CESSB_MIC_X+110,POS_CESSB_MIC_Y);
       lcd.print("BW:");
       switch (radio.bandwidth)
@@ -1328,6 +1351,7 @@ static void show_cessb_settings(void)
         case 2: lcd.print("NB2"); break;
         case 3: lcd.print("NB3"); break;
         case 4: lcd.print("NB4"); break;
+        case 5: lcd.print("NB5"); break;
       }
     }
   }
@@ -1787,10 +1811,10 @@ void __not_in_flash_func(loop)(void)
         int16_t tx_q = 0;
         switch (radio.mode)
         {
-          case MODE_LSB: DSP::process_mic(adc_value,tx_q,tx_i,mic_gain,radio.cessb); break;
-          case MODE_USB: DSP::process_mic(adc_value,tx_i,tx_q,mic_gain,radio.cessb); break;
-          case MODE_CWL: CW::process_cw(radio.keydown,tx_i,tx_q);                    break;
-          case MODE_CWU: CW::process_cw(radio.keydown,tx_i,tx_q);                    break;
+          case MODE_LSB: DSP::process_mic(adc_value,tx_q,tx_i,mic_gain,radio.micproc,radio.cessb); break;
+          case MODE_USB: DSP::process_mic(adc_value,tx_i,tx_q,mic_gain,radio.micproc,radio.cessb); break;
+          case MODE_CWL: CW::process_cw(radio.keydown,tx_i,tx_q); break;
+          case MODE_CWU: CW::process_cw(radio.keydown,tx_i,tx_q); break;
         }
         tx_i = (int16_t)((float)tx_i * tx_level / 100.0f);
         tx_q = (int16_t)((float)tx_q * tx_level / 100.0f);
@@ -2242,6 +2266,7 @@ void loop1(void)
         case OPTION_NB_LEVEL2:      radio.nblevel = NB_LEVEL2;                      break;
         case OPTION_NB_LEVEL3:      radio.nblevel = NB_LEVEL3;                      break;
         case OPTION_NB_LEVEL4:      radio.nblevel = NB_LEVEL4;                      break;
+        case OPTION_NB_LEVEL5:      radio.nblevel = NB_LEVEL5;                      break;
         case OPTION_NB_OFF:         radio.nblevel = NB_OFF;                         break;
         case OPTION_MIC_25:         radio.micgain = 25;                             break;
         case OPTION_MIC_50:         radio.micgain = 50;                             break;
@@ -2251,6 +2276,12 @@ void loop1(void)
         case OPTION_MIC_150:        radio.micgain = 150;                            break;
         case OPTION_MIC_175:        radio.micgain = 175;                            break;
         case OPTION_MIC_200:        radio.micgain = 200;                            break;
+        case OPTION_MIC_PROC1:      radio.micproc = MIC_PROC1;                      break;
+        case OPTION_MIC_PROC2:      radio.micproc = MIC_PROC2;                      break;
+        case OPTION_MIC_PROC3:      radio.micproc = MIC_PROC3;                      break;
+        case OPTION_MIC_PROC4:      radio.micproc = MIC_PROC4;                      break;
+        case OPTION_MIC_PROC5:      radio.micproc = MIC_PROC5;                      break;
+        case OPTION_MIC_PROC_OFF:   radio.micproc = MIC_PROC_OFF;                   break;
         case OPTION_CESSB_ON:       radio.cessb = true;                             break;
         case OPTION_CESSB_OFF:      radio.cessb = false;                            break;
         case OPTION_GAUSSIAN_ON:    radio.gaussian = true;                          break;
