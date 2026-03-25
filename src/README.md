@@ -39,4 +39,6 @@
  * 2.6.240 noise blanker
  * 2.7.240 TX/RX transition glitch
  * 2.8.240 reposition status info
+ * 2.9.240 tweak noise blanker
+ * 3.0.240 mic processor
 
