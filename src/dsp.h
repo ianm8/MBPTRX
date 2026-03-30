@@ -203,7 +203,7 @@ namespace DSP
     return agc(audio_out * 32768.0f);
   }
 
-  static const int16_t __not_in_flash_func(process_cw)(const int16_t in_i,const int16_t in_q)
+  static const int16_t __not_in_flash_func(process_cw)(const int16_t in_i,const int16_t in_q,float &sig)
   {
     // remove DC
     const float ii = FILTER::dc1f((float)in_i / 32768.0f);
@@ -217,10 +217,10 @@ namespace DSP
     const float ssb = p45 - n45;
 
     // BPF for CW
-    const float audio_out = FILTER::bpf_700f(ssb);
+    sig = FILTER::bpf_700f(ssb);
 
     // AGC returns 12 bit value
-    return agc(audio_out * 32768.0f);
+    return agc(sig * 32768.0f);
   }
 
   static const int16_t __not_in_flash_func(process_am)(const int16_t in_i,const int16_t in_q,const uint32_t jnr_level)

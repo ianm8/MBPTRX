@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 3.0.240
+ * MBPTRX Version 3.1.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -57,6 +57,7 @@
  *  2.8.240 reposition status info
  *  2.9.240 tweak noise blanker
  *  3.0.240 mic processor
+ *  3.1.240 CW decoder
  */
 
 //#define DEBUGGING_SKIP
@@ -74,6 +75,7 @@
 #include "dsp.h"
 #include "menu.h"
 #include "cw.h"
+#include "cwdecode.h"
 #include "hardware/pwm.h"
 #include "hardware/adc.h"
 #include "hardware/vreg.h"
@@ -84,7 +86,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V3.0."
+#define VERSION_STRING "  V3.1."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -277,6 +279,7 @@ volatile static struct
   bool menu_active;
   bool mode_auto;
   bool graph_swr;
+  bool cwdecode;
   int8_t level[NUM_BANDS];
 }
 radio =
@@ -303,6 +306,7 @@ radio =
   true,
   false,
   true,
+  false,
   false,
   {0,0,0,0,0,0,0,0,0}
 };
@@ -360,6 +364,7 @@ TFT_eSprite lcd = TFT_eSprite(&tft);
 I2S i2s(INPUT);
 
 auto_init_mutex(rotary_mutex);
+auto_init_mutex(cw_decode_mutex);
 volatile static uint32_t audio_pwm = 0;
 volatile static uint32_t tx_i_pwm = 0;
 volatile static uint32_t tx_q_pwm = 0;
@@ -381,6 +386,7 @@ volatile static bool dah_latched = false;
 volatile static bool save_settings_now = false;
 volatile static bool setup_complete = false;
 volatile static bool set_spectrum_level = false;
+volatile static char cw_decode_buf[32] = "";
 
 volatile static uint32_t wp = 0;
 static uint8_t water[WATERFALL_ROWS][LCD_WIDTH] = {0};
@@ -880,6 +886,11 @@ void setup(void)
 #endif
   lcd.pushSprite(0,0);
 
+  for (uint8_t i=0;i<sizeof(cw_decode_buf);i++)
+  {
+    cw_decode_buf[i] = '\0';
+  }
+
   // splash delay
   delay(2000);
 
@@ -1357,6 +1368,30 @@ static void show_cessb_settings(void)
   }
 }
 
+static void show_cw_decode(void)
+{
+  static char z_buf[32] = "";
+  if (!radio.cwdecode)
+  {
+    return;
+  }
+  if (!(radio.mode==MODE_CWU || radio.mode==MODE_CWL))
+  {
+    return;
+  }
+  if (!mutex_try_enter(&cw_decode_mutex,0ul))
+  {
+    return;
+  }
+  strcpy(z_buf,(char*)cw_decode_buf);
+  mutex_exit(&cw_decode_mutex);
+  lcd.fillRect(0,115,240,20,LCD_BLACK);
+  lcd.setTextSize(2);
+  lcd.setTextColor(LCD_WHITE);
+  lcd.setCursor(0,116);
+  lcd.print(z_buf);
+}
+
 static void show_spectrum(void)
 {
   // show the spectrum
@@ -1634,6 +1669,7 @@ static void update_display(const uint32_t signal_level = 0u,const int32_t debug_
   show_cessb_settings();
   show_jnr();
   show_spectrum();
+  show_cw_decode();
   show_menu();
   show_debug_value(debug_value);
   display_refresh();
@@ -1915,6 +1951,7 @@ void __not_in_flash_func(loop)(void)
           adc_sample_p++;
           adc_sample_p &= (MAX_ADC_SAMPLES-1);
           int32_t dac_audio = 0;
+          float cwsig = 0.0f;
           const uint8_t jnr = radio.jnrlevel;
           const uint8_t nb = radio.nblevel;
           const uint8_t bw = radio.bandwidth - 1;
@@ -1923,13 +1960,49 @@ void __not_in_flash_func(loop)(void)
             case MODE_LSB: dac_audio = DSP::process_ssb(qq,ii,jnr,bw,nb); break;
             case MODE_USB: dac_audio = DSP::process_ssb(ii,qq,jnr,bw,nb); break;
             case MODE_AM:  dac_audio = DSP::process_am(ii,qq,jnr);        break;
-            case MODE_CWL: dac_audio = DSP::process_cw(qq,ii);            break;
-            case MODE_CWU: dac_audio = DSP::process_cw(ii,qq);            break;
+            case MODE_CWL: dac_audio = DSP::process_cw(qq,ii,cwsig);      break;
+            case MODE_CWU: dac_audio = DSP::process_cw(ii,qq,cwsig);      break;
           }
           dac_audio = constrain(dac_audio,-2048l,+2047l);
           dac_audio += 2048l;
           dac_h = dac_audio >> 6;
           dac_l = dac_audio & 0x3f;
+          if (radio.cwdecode)
+          {
+            if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
+            {
+              static bool last_key_down = false;
+              const uint8_t raw = CWDECODE::morse_decode(cwsig);
+              const bool cw_key_down = raw&0x80?true:false;
+              const char raw_char = raw & 0x7f;
+              if (cw_key_down != last_key_down || raw_char!='\0')
+              {
+                last_key_down = cw_key_down;
+                mutex_enter_blocking(&cw_decode_mutex);
+                cw_decode_buf[20] = '\0';
+                cw_decode_buf[19] = cw_key_down?'*':' ';
+                if (raw_char!='\0')
+                {
+                  for (uint8_t i=0;i<18;i++)
+                  {
+                    const char c = cw_decode_buf[i+1];
+                    cw_decode_buf[i] = (c=='\0'?' ':c);
+                  }
+                  cw_decode_buf[18] = raw_char;
+                }
+                mutex_exit(&cw_decode_mutex);
+              }
+            }
+            else
+            {
+              CWDECODE::md_initialised = 0;
+            }
+          }
+          else
+          {
+            CWDECODE::md_initialised = 0;
+            memset((char*)cw_decode_buf,0,sizeof(cw_decode_buf));
+          }
         }
         // only process tune in receive mode
         static int32_t rotary = 0l;
@@ -2255,6 +2328,8 @@ void loop1(void)
         case OPTION_CW_SPEED_20:    radio.cw_dit = 60u;                             break;
         case OPTION_CW_SPEED_25:    radio.cw_dit = 48u;                             break;
         case OPTION_CW_SPEED_30:    radio.cw_dit = 40u;                             break;
+        case OPTION_CWDECODE_ON:    radio.cwdecode = true;                          break;
+        case OPTION_CWDECODE_OFF:   radio.cwdecode = false;                         break;
         case OPTION_SPECTRUM_WIND:  radio.spectype = SPECTRUM_WIND;                 break;
         case OPTION_SPECTRUM_GRASS: radio.spectype = SPECTRUM_GRASS;                break;
         case OPTION_SPECTRUM_LEVEL: set_spectrum_level = true;                      break;

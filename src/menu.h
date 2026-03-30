@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 16U
+#define NUM_MENU_ITEMS 17U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -42,6 +42,7 @@ enum menu_top_t
   MENU_MODE,
   MENU_BANDWIDTH,
   MENU_CW_SPEED,
+  MENU_CW_DECODE,
   MENU_SIDETONE,
   MENU_SIDETONE_LEVEL,
   MENU_SPECTRUM_TYPE,
@@ -91,6 +92,8 @@ enum option_value_t
   OPTION_CW_SPEED_20,
   OPTION_CW_SPEED_25,
   OPTION_CW_SPEED_30,
+  OPTION_CWDECODE_ON,
+  OPTION_CWDECODE_OFF,
   OPTION_SIDETONE_500,
   OPTION_SIDETONE_550,
   OPTION_SIDETONE_600,
@@ -297,6 +300,23 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_SIDETONE_MED,"Medium"},
       {OPTION_SIDETONE_HI,"High"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
+    }
+  },
+  {
+    MENU_CW_DECODE,
+    "CW Decode",
+    3U,
+    {
+      {OPTION_CWDECODE_ON,"On"},
+      {OPTION_CWDECODE_OFF,"Off"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
