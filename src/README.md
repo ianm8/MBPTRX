@@ -41,4 +41,5 @@
  * 2.8.240 reposition status info
  * 2.9.240 tweak noise blanker
  * 3.0.240 mic processor
+ * 3.1.240 CW decoder
 
