@@ -41,5 +41,7 @@
  * 2.8.240 reposition status info
  * 2.9.240 tweak noise blanker
  * 3.0.240 mic processor
- * 3.1.240 CW decoder
+ * 3.1.240 CW decoder - adaptive
+ * 3.2.240 CW decoder - schmitt
+ * 3.3.240 spectrum set or adjust
 
