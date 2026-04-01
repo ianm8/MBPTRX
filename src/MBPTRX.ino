@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 3.1.240
+ * MBPTRX Version 3.2.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -57,7 +57,8 @@
  *  2.8.240 reposition status info
  *  2.9.240 tweak noise blanker
  *  3.0.240 mic processor
- *  3.1.240 CW decoder
+ *  3.1.240 CW decoder - adaptive
+ *  3.2.240 CW decoder - schmitt
  */
 
 //#define DEBUGGING_SKIP
@@ -75,7 +76,8 @@
 #include "dsp.h"
 #include "menu.h"
 #include "cw.h"
-#include "cwdecode.h"
+#include "cwdecode1.h"
+#include "cwdecode2.h"
 #include "hardware/pwm.h"
 #include "hardware/adc.h"
 #include "hardware/vreg.h"
@@ -86,7 +88,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V3.1."
+#define VERSION_STRING "  V3.2."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -264,6 +266,7 @@ volatile static struct
   uint32_t cw_level;
   uint32_t sidetone;
   uint32_t cw_phase;
+  uint32_t cwdecode;
   uint32_t spectype;
   uint32_t jnrlevel;
   uint32_t nblevel;
@@ -279,7 +282,6 @@ volatile static struct
   bool menu_active;
   bool mode_auto;
   bool graph_swr;
-  bool cwdecode;
   int8_t level[NUM_BANDS];
 }
 radio =
@@ -292,6 +294,7 @@ radio =
   DEFAULT_CW_LEVEL,
   DEFAULT_SIDETONE,
   (uint32_t)(((uint64_t)DEFAULT_SIDETONE * (1ull << 32)) / SAMPLERATE),
+  0l,
   SPECTRUM_WIND,
   JNR_OFF,
   NB_OFF,
@@ -306,7 +309,6 @@ radio =
   true,
   false,
   true,
-  false,
   false,
   {0,0,0,0,0,0,0,0,0}
 };
@@ -1306,6 +1308,12 @@ static void show_cw_settings(void)
     lcd.print(sz_level);
     lcd.print(" Sidetone:");
     lcd.print(radio.sidetone);
+    if (radio.cwdecode!=0)
+    {
+      lcd.drawRect(176,POS_CW_SETTINGS_Y-2,12,11,LCD_RED);
+      lcd.setCursor(179,POS_CW_SETTINGS_Y);
+      lcd.print(radio.cwdecode==1?"A":"S");
+    }
   }
 }
 
@@ -1371,7 +1379,7 @@ static void show_cessb_settings(void)
 static void show_cw_decode(void)
 {
   static char z_buf[32] = "";
-  if (!radio.cwdecode)
+  if (radio.cwdecode==0)
   {
     return;
   }
@@ -1967,12 +1975,15 @@ void __not_in_flash_func(loop)(void)
           dac_audio += 2048l;
           dac_h = dac_audio >> 6;
           dac_l = dac_audio & 0x3f;
-          if (radio.cwdecode)
+          if (radio.cwdecode!=0)
           {
             if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
             {
               static bool last_key_down = false;
-              const uint8_t raw = CWDECODE::morse_decode(cwsig);
+////
+              const uint8_t raw = radio.cwdecode==1?
+                CWDECODE1::morse_decode(cwsig):
+                CWDECODE2::morse_decode(cwsig);
               const bool cw_key_down = raw&0x80?true:false;
               const char raw_char = raw & 0x7f;
               if (cw_key_down != last_key_down || raw_char!='\0')
@@ -1995,12 +2006,15 @@ void __not_in_flash_func(loop)(void)
             }
             else
             {
-              CWDECODE::md_initialised = 0;
+              CWDECODE1::md1_initialised = 0;
+              CWDECODE2::md2_initialised = 0;
+              memset((char*)cw_decode_buf,0,sizeof(cw_decode_buf));
             }
           }
           else
           {
-            CWDECODE::md_initialised = 0;
+            CWDECODE1::md1_initialised = 0;
+            CWDECODE2::md2_initialised = 0;
             memset((char*)cw_decode_buf,0,sizeof(cw_decode_buf));
           }
         }
@@ -2285,85 +2299,86 @@ void loop1(void)
       const option_value_t option = process_menu();
       switch (option)
       {
-        case OPTION_MODE_LSB:       radio.mode = MODE_LSB; radio.mode_auto = false; break;
-        case OPTION_MODE_USB:       radio.mode = MODE_USB; radio.mode_auto = false; break;
-        case OPTION_MODE_CWL:       radio.mode = MODE_CWL; radio.mode_auto = false; break;
-        case OPTION_MODE_CWU:       radio.mode = MODE_CWU; radio.mode_auto = false; break;
-        case OPTION_MODE_AM:        radio.mode = MODE_AM;  radio.mode_auto = false; break;
-        case OPTION_MODE_AUTO:      radio.mode_auto = true;                         break;
-        case OPTION_STEP_10:        radio.step = 10U;                               break;
-        case OPTION_STEP_100:       radio.step = 100U;                              break;
-        case OPTION_STEP_500:       radio.step = 500U;                              break;
-        case OPTION_STEP_1000:      radio.step = 1000U;                             break;
-        case OPTION_STEP_5000:      radio.step = 5000U;                             break;
-        case OPTION_STEP_10000:     radio.step = 10000U;                            break;
-        case OPTION_STEP_100000:    radio.step = 100000U;                           break;
-        case OPTION_BAND_80M:       radio.band = BAND_80M;                          break;
-        case OPTION_BAND_40M:       radio.band = BAND_40M;                          break;
-        case OPTION_BAND_30M:       radio.band = BAND_30M;                          break;
-        case OPTION_BAND_20M:       radio.band = BAND_20M;                          break;
-        case OPTION_BAND_17M:       radio.band = BAND_17M;                          break;
-        case OPTION_BAND_15M:       radio.band = BAND_15M;                          break;
-        case OPTION_BAND_12M:       radio.band = BAND_12M;                          break;
-        case OPTION_BAND_10M:       radio.band = BAND_10M;                          break;
-        case OPTION_BAND_SWL:       radio.band = BAND_SWL;                          break;
-        case OPTION_BW_2000:        radio.bandwidth = 1ul;                          break;
-        case OPTION_BW_2200:        radio.bandwidth = 2ul;                          break;
-        case OPTION_BW_2400:        radio.bandwidth = 3ul;                          break;
-        case OPTION_BW_2600:        radio.bandwidth = 4ul;                          break;
-        case OPTION_BW_2800:        radio.bandwidth = 5ul;                          break;
-        case OPTION_SIDETONE_500:   radio.sidetone = 500u;                          break;
-        case OPTION_SIDETONE_550:   radio.sidetone = 550u;                          break;
-        case OPTION_SIDETONE_600:   radio.sidetone = 600u;                          break;
-        case OPTION_SIDETONE_650:   radio.sidetone = 650u;                          break;
-        case OPTION_SIDETONE_700:   radio.sidetone = 700u;                          break;
-        case OPTION_SIDETONE_750:   radio.sidetone = 750u;                          break;
-        case OPTION_SIDETONE_800:   radio.sidetone = 800u;                          break;
-        case OPTION_SIDETONE_850:   radio.sidetone = 850u;                          break;
-        case OPTION_SIDETONE_LOW:   radio.cw_level = 1u;                            break;
-        case OPTION_SIDETONE_MED:   radio.cw_level = 2u;                            break;
-        case OPTION_SIDETONE_HI:    radio.cw_level = 3u;                            break;
-        case OPTION_CW_SPEED_10:    radio.cw_dit = 120u;                            break;
-        case OPTION_CW_SPEED_15:    radio.cw_dit = 80u;                             break;
-        case OPTION_CW_SPEED_20:    radio.cw_dit = 60u;                             break;
-        case OPTION_CW_SPEED_25:    radio.cw_dit = 48u;                             break;
-        case OPTION_CW_SPEED_30:    radio.cw_dit = 40u;                             break;
-        case OPTION_CWDECODE_ON:    radio.cwdecode = true;                          break;
-        case OPTION_CWDECODE_OFF:   radio.cwdecode = false;                         break;
-        case OPTION_SPECTRUM_WIND:  radio.spectype = SPECTRUM_WIND;                 break;
-        case OPTION_SPECTRUM_GRASS: radio.spectype = SPECTRUM_GRASS;                break;
-        case OPTION_SPECTRUM_LEVEL: set_spectrum_level = true;                      break;
-        case OPTION_JNR_LEVEL1:     radio.jnrlevel = JNR_LEVEL1;                    break;
-        case OPTION_JNR_LEVEL2:     radio.jnrlevel = JNR_LEVEL2;                    break;
-        case OPTION_JNR_LEVEL3:     radio.jnrlevel = JNR_LEVEL3;                    break;
-        case OPTION_JNR_OFF:        radio.jnrlevel = JNR_OFF;                       break;
-        case OPTION_NB_LEVEL1:      radio.nblevel = NB_LEVEL1;                      break;
-        case OPTION_NB_LEVEL2:      radio.nblevel = NB_LEVEL2;                      break;
-        case OPTION_NB_LEVEL3:      radio.nblevel = NB_LEVEL3;                      break;
-        case OPTION_NB_LEVEL4:      radio.nblevel = NB_LEVEL4;                      break;
-        case OPTION_NB_LEVEL5:      radio.nblevel = NB_LEVEL5;                      break;
-        case OPTION_NB_OFF:         radio.nblevel = NB_OFF;                         break;
-        case OPTION_MIC_25:         radio.micgain = 25;                             break;
-        case OPTION_MIC_50:         radio.micgain = 50;                             break;
-        case OPTION_MIC_75:         radio.micgain = 75;                             break;
-        case OPTION_MIC_100:        radio.micgain = 100;                            break;
-        case OPTION_MIC_125:        radio.micgain = 125;                            break;
-        case OPTION_MIC_150:        radio.micgain = 150;                            break;
-        case OPTION_MIC_175:        radio.micgain = 175;                            break;
-        case OPTION_MIC_200:        radio.micgain = 200;                            break;
-        case OPTION_MIC_PROC1:      radio.micproc = MIC_PROC1;                      break;
-        case OPTION_MIC_PROC2:      radio.micproc = MIC_PROC2;                      break;
-        case OPTION_MIC_PROC3:      radio.micproc = MIC_PROC3;                      break;
-        case OPTION_MIC_PROC4:      radio.micproc = MIC_PROC4;                      break;
-        case OPTION_MIC_PROC5:      radio.micproc = MIC_PROC5;                      break;
-        case OPTION_MIC_PROC_OFF:   radio.micproc = MIC_PROC_OFF;                   break;
-        case OPTION_CESSB_ON:       radio.cessb = true;                             break;
-        case OPTION_CESSB_OFF:      radio.cessb = false;                            break;
-        case OPTION_GAUSSIAN_ON:    radio.gaussian = true;                          break;
-        case OPTION_GAUSSIAN_OFF:   radio.gaussian = false;                         break;
-        case OPTION_GRAPH_SWR_Y:    radio.graph_swr = true;                         break;
-        case OPTION_GRAPH_SWR_N:    radio.graph_swr = false;                        break;
-        case OPTION_EXIT:           radio.menu_active = false;                      break;
+        case OPTION_MODE_LSB:        radio.mode = MODE_LSB; radio.mode_auto = false; break;
+        case OPTION_MODE_USB:        radio.mode = MODE_USB; radio.mode_auto = false; break;
+        case OPTION_MODE_CWL:        radio.mode = MODE_CWL; radio.mode_auto = false; break;
+        case OPTION_MODE_CWU:        radio.mode = MODE_CWU; radio.mode_auto = false; break;
+        case OPTION_MODE_AM:         radio.mode = MODE_AM;  radio.mode_auto = false; break;
+        case OPTION_MODE_AUTO:       radio.mode_auto = true;                         break;
+        case OPTION_STEP_10:         radio.step = 10U;                               break;
+        case OPTION_STEP_100:        radio.step = 100U;                              break;
+        case OPTION_STEP_500:        radio.step = 500U;                              break;
+        case OPTION_STEP_1000:       radio.step = 1000U;                             break;
+        case OPTION_STEP_5000:       radio.step = 5000U;                             break;
+        case OPTION_STEP_10000:      radio.step = 10000U;                            break;
+        case OPTION_STEP_100000:     radio.step = 100000U;                           break;
+        case OPTION_BAND_80M:        radio.band = BAND_80M;                          break;
+        case OPTION_BAND_40M:        radio.band = BAND_40M;                          break;
+        case OPTION_BAND_30M:        radio.band = BAND_30M;                          break;
+        case OPTION_BAND_20M:        radio.band = BAND_20M;                          break;
+        case OPTION_BAND_17M:        radio.band = BAND_17M;                          break;
+        case OPTION_BAND_15M:        radio.band = BAND_15M;                          break;
+        case OPTION_BAND_12M:        radio.band = BAND_12M;                          break;
+        case OPTION_BAND_10M:        radio.band = BAND_10M;                          break;
+        case OPTION_BAND_SWL:        radio.band = BAND_SWL;                          break;
+        case OPTION_BW_2000:         radio.bandwidth = 1ul;                          break;
+        case OPTION_BW_2200:         radio.bandwidth = 2ul;                          break;
+        case OPTION_BW_2400:         radio.bandwidth = 3ul;                          break;
+        case OPTION_BW_2600:         radio.bandwidth = 4ul;                          break;
+        case OPTION_BW_2800:         radio.bandwidth = 5ul;                          break;
+        case OPTION_SIDETONE_500:    radio.sidetone = 500u;                          break;
+        case OPTION_SIDETONE_550:    radio.sidetone = 550u;                          break;
+        case OPTION_SIDETONE_600:    radio.sidetone = 600u;                          break;
+        case OPTION_SIDETONE_650:    radio.sidetone = 650u;                          break;
+        case OPTION_SIDETONE_700:    radio.sidetone = 700u;                          break;
+        case OPTION_SIDETONE_750:    radio.sidetone = 750u;                          break;
+        case OPTION_SIDETONE_800:    radio.sidetone = 800u;                          break;
+        case OPTION_SIDETONE_850:    radio.sidetone = 850u;                          break;
+        case OPTION_SIDETONE_LOW:    radio.cw_level = 1u;                            break;
+        case OPTION_SIDETONE_MED:    radio.cw_level = 2u;                            break;
+        case OPTION_SIDETONE_HI:     radio.cw_level = 3u;                            break;
+        case OPTION_CW_SPEED_10:     radio.cw_dit = 120u;                            break;
+        case OPTION_CW_SPEED_15:     radio.cw_dit = 80u;                             break;
+        case OPTION_CW_SPEED_20:     radio.cw_dit = 60u;                             break;
+        case OPTION_CW_SPEED_25:     radio.cw_dit = 48u;                             break;
+        case OPTION_CW_SPEED_30:     radio.cw_dit = 40u;                             break;
+        case OPTION_DECODE_ADAPTIVE: radio.cwdecode = 1;                             break;
+        case OPTION_DECODE_SCHMITT:  radio.cwdecode = 2;                             break;
+        case OPTION_CWDECODE_OFF:    radio.cwdecode = 0;                             break;
+        case OPTION_SPECTRUM_WIND:   radio.spectype = SPECTRUM_WIND;                 break;
+        case OPTION_SPECTRUM_GRASS:  radio.spectype = SPECTRUM_GRASS;                break;
+        case OPTION_SPECTRUM_LEVEL:  set_spectrum_level = true;                      break;
+        case OPTION_JNR_LEVEL1:      radio.jnrlevel = JNR_LEVEL1;                    break;
+        case OPTION_JNR_LEVEL2:      radio.jnrlevel = JNR_LEVEL2;                    break;
+        case OPTION_JNR_LEVEL3:      radio.jnrlevel = JNR_LEVEL3;                    break;
+        case OPTION_JNR_OFF:         radio.jnrlevel = JNR_OFF;                       break;
+        case OPTION_NB_LEVEL1:       radio.nblevel = NB_LEVEL1;                      break;
+        case OPTION_NB_LEVEL2:       radio.nblevel = NB_LEVEL2;                      break;
+        case OPTION_NB_LEVEL3:       radio.nblevel = NB_LEVEL3;                      break;
+        case OPTION_NB_LEVEL4:       radio.nblevel = NB_LEVEL4;                      break;
+        case OPTION_NB_LEVEL5:       radio.nblevel = NB_LEVEL5;                      break;
+        case OPTION_NB_OFF:          radio.nblevel = NB_OFF;                         break;
+        case OPTION_MIC_25:          radio.micgain = 25;                             break;
+        case OPTION_MIC_50:          radio.micgain = 50;                             break;
+        case OPTION_MIC_75:          radio.micgain = 75;                             break;
+        case OPTION_MIC_100:         radio.micgain = 100;                            break;
+        case OPTION_MIC_125:         radio.micgain = 125;                            break;
+        case OPTION_MIC_150:         radio.micgain = 150;                            break;
+        case OPTION_MIC_175:         radio.micgain = 175;                            break;
+        case OPTION_MIC_200:         radio.micgain = 200;                            break;
+        case OPTION_MIC_PROC1:       radio.micproc = MIC_PROC1;                      break;
+        case OPTION_MIC_PROC2:       radio.micproc = MIC_PROC2;                      break;
+        case OPTION_MIC_PROC3:       radio.micproc = MIC_PROC3;                      break;
+        case OPTION_MIC_PROC4:       radio.micproc = MIC_PROC4;                      break;
+        case OPTION_MIC_PROC5:       radio.micproc = MIC_PROC5;                      break;
+        case OPTION_MIC_PROC_OFF:    radio.micproc = MIC_PROC_OFF;                   break;
+        case OPTION_CESSB_ON:        radio.cessb = true;                             break;
+        case OPTION_CESSB_OFF:       radio.cessb = false;                            break;
+        case OPTION_GAUSSIAN_ON:     radio.gaussian = true;                          break;
+        case OPTION_GAUSSIAN_OFF:    radio.gaussian = false;                         break;
+        case OPTION_GRAPH_SWR_Y:     radio.graph_swr = true;                         break;
+        case OPTION_GRAPH_SWR_N:     radio.graph_swr = false;                        break;
+        case OPTION_EXIT:            radio.menu_active = false;                      break;
       }
 
       if (set_spectrum_level)
