@@ -230,8 +230,7 @@ namespace CWDECODE2
 
   static inline void md2_emit_char(md2_ctx_t* c)
   {
-    if (c->code_len == 0)
-      return;
+    if (c->code_len == 0) return;
     c->code[c->code_len] = '\0';
     c->pending = md2_lookup(c->code);
     c->code_len = 0;
@@ -246,7 +245,7 @@ namespace CWDECODE2
    */
   static inline void md2_update_dot(md2_ctx_t* c, float obs)
   {
-    float rate = (obs < c->dot_est) ? MD2_DOT_FAST_RATE : MD2_DOT_SLOW_RATE;
+    const float rate = (obs < c->dot_est) ? MD2_DOT_FAST_RATE : MD2_DOT_SLOW_RATE;
     c->dot_est += rate * (obs - c->dot_est);
     md2_clamp_dot(c);
   }
@@ -427,4 +426,5 @@ namespace CWDECODE2
     return result;
   }
 }
-#endif /* MORSE_DECODER2_H */
+
+#endif

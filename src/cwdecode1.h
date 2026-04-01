@@ -273,8 +273,7 @@ namespace CWDECODE1
   /* Flush the accumulated code string to pending and reset the accumulator */
   static inline void md_emit_char(md_ctx_t *c)
   {
-    if (c->code_len == 0)
-      return;
+    if (c->code_len == 0) return;
     c->code[c->code_len] = '\0';
     c->pending = md_lookup(c->code);
     c->code_len = 0;
@@ -565,4 +564,4 @@ namespace CWDECODE1
   }
 }
 
-#endif /* MORSE_DECODER_H */
+#endif

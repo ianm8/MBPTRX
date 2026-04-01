@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 3.2.240
+ * MBPTRX Version 3.3.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -59,6 +59,7 @@
  *  3.0.240 mic processor
  *  3.1.240 CW decoder - adaptive
  *  3.2.240 CW decoder - schmitt
+ *  3.3.240 spectrum set or adjust
  */
 
 //#define DEBUGGING_SKIP
@@ -88,7 +89,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V3.2."
+#define VERSION_STRING "  V3.3."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -283,6 +284,7 @@ volatile static struct
   bool mode_auto;
   bool graph_swr;
   int8_t level[NUM_BANDS];
+  int8_t slevel[NUM_BANDS];
 }
 radio =
 {
@@ -310,6 +312,7 @@ radio =
   false,
   true,
   false,
+  {0,0,0,0,0,0,0,0,0},
   {0,0,0,0,0,0,0,0,0}
 };
 
@@ -388,6 +391,7 @@ volatile static bool dah_latched = false;
 volatile static bool save_settings_now = false;
 volatile static bool setup_complete = false;
 volatile static bool set_spectrum_level = false;
+volatile static bool adj_spectrum_level = false;
 volatile static char cw_decode_buf[32] = "";
 
 volatile static uint32_t wp = 0;
@@ -624,6 +628,7 @@ static void restore_settings(void)
       {
         radio.level[i] = 0;
       }
+      radio.slevel[i] = radio.level[i];
     }
   }
   if (radio.micgain<25ul || radio.micgain>200ul)
@@ -1277,7 +1282,7 @@ static void show_meter_dial(const uint8_t sig)
 
 static void show_cw_settings(void)
 {
-  if (set_spectrum_level)
+  if (set_spectrum_level || adj_spectrum_level)
   {
     return;
   }
@@ -1319,7 +1324,7 @@ static void show_cw_settings(void)
 
 static void show_cessb_settings(void)
 {
-  if (set_spectrum_level)
+  if (set_spectrum_level || adj_spectrum_level)
   {
     lcd.setTextSize(1);
     lcd.setTextColor(LCD_GREEN);
@@ -1980,7 +1985,6 @@ void __not_in_flash_func(loop)(void)
             if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
             {
               static bool last_key_down = false;
-////
               const uint8_t raw = radio.cwdecode==1?
                 CWDECODE1::morse_decode(cwsig):
                 CWDECODE2::morse_decode(cwsig);
@@ -2347,7 +2351,8 @@ void loop1(void)
         case OPTION_CWDECODE_OFF:    radio.cwdecode = 0;                             break;
         case OPTION_SPECTRUM_WIND:   radio.spectype = SPECTRUM_WIND;                 break;
         case OPTION_SPECTRUM_GRASS:  radio.spectype = SPECTRUM_GRASS;                break;
-        case OPTION_SPECTRUM_LEVEL:  set_spectrum_level = true;                      break;
+        case OPTION_SPEC_SETLEVEL:   set_spectrum_level = true;                      break;
+        case OPTION_SPEC_ADJLEVEL:   adj_spectrum_level = true;                      break;
         case OPTION_JNR_LEVEL1:      radio.jnrlevel = JNR_LEVEL1;                    break;
         case OPTION_JNR_LEVEL2:      radio.jnrlevel = JNR_LEVEL2;                    break;
         case OPTION_JNR_LEVEL3:      radio.jnrlevel = JNR_LEVEL3;                    break;
@@ -2383,6 +2388,13 @@ void loop1(void)
 
       if (set_spectrum_level)
       {
+        // restore the saved level
+        radio.level[radio.band] = radio.slevel[radio.band];
+        old_level = radio.level[radio.band];
+      }
+      if (adj_spectrum_level)
+      {
+        // only changing current level, not saving it
         old_level = radio.level[radio.band];
       }
 
@@ -2497,7 +2509,7 @@ void loop1(void)
     else
     {
       // menu not active
-      if (set_spectrum_level)
+      if (set_spectrum_level || adj_spectrum_level)
       {
         // rotary sets level
         mutex_enter_blocking(&rotary_mutex);
@@ -2512,8 +2524,10 @@ void loop1(void)
           // if button pressed
           // save new level (if changed)
           // wait for button release
-          if (new_level!=old_level)
+          if (set_spectrum_level && new_level!=old_level)
           {
+            // remember saved level
+            radio.slevel[radio.band] = new_level;
             save_settings_now = true;
             while (save_settings_now)
             {
@@ -2529,6 +2543,7 @@ void loop1(void)
           }
           delay(50);
           set_spectrum_level = false;
+          adj_spectrum_level = false;
         }
       }
       else
@@ -2657,10 +2672,11 @@ void loop1(void)
   {
     const float saved_agc = DSP::agc_peak;
     radio.menu_active = false;
-    if (set_spectrum_level)
+    if (set_spectrum_level || adj_spectrum_level)
     {
       // restore old level in case it was changed
       set_spectrum_level = false;
+      adj_spectrum_level = false;
       radio.level[radio.band] = old_level;
     }
     if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
