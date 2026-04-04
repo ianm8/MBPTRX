@@ -44,4 +44,5 @@
  * 3.1.240 CW decoder - adaptive
  * 3.2.240 CW decoder - schmitt
  * 3.3.240 spectrum set or adjust
+ * 3.4.240 update fonts
 
