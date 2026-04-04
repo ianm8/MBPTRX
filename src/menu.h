@@ -148,7 +148,7 @@ struct options_t
   const char* option_name;
 };
 
-volatile static struct
+static const struct
 {
   const menu_top_t menu_value;
   const char *menu_name;

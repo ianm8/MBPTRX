@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 3.3.240
+ * MBPTRX Version 3.4.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -60,6 +60,7 @@
  *  3.1.240 CW decoder - adaptive
  *  3.2.240 CW decoder - schmitt
  *  3.3.240 spectrum set or adjust
+ *  3.4.240 update fonts
  */
 
 //#define DEBUGGING_SKIP
@@ -82,14 +83,17 @@
 #include "hardware/pwm.h"
 #include "hardware/adc.h"
 #include "hardware/vreg.h"
+#include "ArialBold14pt7b.h"
+#include "ArialBold16pt7b.h"
 
 //#define YOUR_CALL "VK7IAN"
+#define POS_CALL_X 70
 
 #if SI5351_PLL_VCO_MIN != 440000000
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V3.3."
+#define VERSION_STRING "  V3.4."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define BAND_80M 0
@@ -164,16 +168,16 @@
 // width and height of LCD
 #define LCD_WIDTH         240
 #define LCD_HEIGHT        135
-#define POS_SPLASH_X       80
-#define POS_SPLASH_Y       50
+#define POS_SPLASH_X       55
+#define POS_SPLASH_Y       60
 #define POS_VERSION_X       0
 #define POS_VERSION_Y     122
-#define POS_FREQUENCY_X    60
-#define POS_FREQUENCY_Y     0
-#define POS_TX_X            0
-#define POS_TX_Y            5
-#define POS_RX_X           30
-#define POS_RX_Y            5
+#define POS_FREQUENCY_X    72
+#define POS_FREQUENCY_Y    21
+#define POS_TX_X            4
+#define POS_TX_Y           17
+#define POS_RX_X           35
+#define POS_RX_Y           17
 #define POS_MODE_X         10
 #define POS_MODE_Y         30
 #define POS_BAND_X         57
@@ -864,10 +868,12 @@ void setup(void)
   for (uint32_t i=0;i<32;i++)
   {
     lcd.fillSprite(LCD_BLACK);
-    lcd.setTextSize(3);
+    lcd.setFreeFont(&FreeSansBold18pt7b);
+    lcd.setTextSize(1);
     lcd.setTextColor(spectrum::color_map_32[i],LCD_BLACK);
     lcd.setCursor(POS_SPLASH_X,POS_SPLASH_Y);
     lcd.print("MBPTRX");
+    lcd.setTextFont(1);
     lcd.setTextSize(1);
     lcd.setTextColor(LCD_WHITE,LCD_BLACK);
     lcd.setCursor(POS_VERSION_X,POS_VERSION_Y);
@@ -875,23 +881,22 @@ void setup(void)
     lcd.pushSprite(0,0);
     delay(50);
   }
-  lcd.fillSprite(LCD_BLACK);
-  lcd.pushSprite(0,0);
+  delay(250);
 
   // intro screen
   lcd.fillSprite(LCD_BLACK);
   lcd.setTextColor(LCD_WHITE,LCD_BLACK);
-  lcd.setTextSize(2);
-  lcd.setCursor(210,120);
+  lcd.setCursor(POS_VERSION_X,POS_VERSION_Y);
   lcd.print(sz_version);
-  lcd.setTextSize(3);
-  lcd.setCursor(80,40);
+  lcd.setFreeFont(&FreeSansBold18pt7b);
+  lcd.setCursor(POS_CALL_X,POS_SPLASH_Y);
 #ifdef YOUR_CALL
   lcd.print(YOUR_CALL);
 #else
   lcd.print("VK7IAN");
 #endif
   lcd.pushSprite(0,0);
+  lcd.setTextFont(1);
 
   for (uint8_t i=0;i<sizeof(cw_decode_buf);i++)
   {
@@ -978,10 +983,12 @@ static void show_frequency(void)
     sz_frequency[3] = sz_frequency[2];
     sz_frequency[2] = '.';
   }
-  lcd.setTextSize(3);
+  lcd.setFreeFont(&Arial_Bold16pt7b);
+  lcd.setTextSize(1);
   lcd.setTextColor(fcolour,LCD_BLACK);
   lcd.setCursor(POS_FREQUENCY_X,POS_FREQUENCY_Y);
   lcd.print(sz_frequency);
+  lcd.setTextFont(1);
 }
 
 static void show_tuning_step(void)
@@ -1110,35 +1117,41 @@ static void show_swr(void)
 
 static void show_tx(void)
 {
-  lcd.setTextSize(2);
+  lcd.setTextSize(1);
+  lcd.setFreeFont(&FreeSansBold9pt7b);
   lcd.setCursor(POS_TX_X,POS_TX_Y);
   lcd.setTextColor(LCD_WHITE);
   lcd.print("TX");
   lcd.setCursor(POS_RX_X,POS_RX_Y);
   lcd.setTextColor(LCD_BLUE);
   lcd.print("RX");
+  lcd.setTextFont(1);
 }
 
 static void show_rx(void)
 {
-  lcd.setTextSize(2);
+  lcd.setTextSize(1);
+  lcd.setFreeFont(&FreeSansBold9pt7b);
   lcd.setCursor(POS_TX_X,POS_TX_Y);
   lcd.setTextColor(LCD_BLUE);
   lcd.print("TX");
   lcd.setCursor(POS_RX_X,POS_RX_Y);
   lcd.setTextColor(LCD_WHITE);
   lcd.print("RX");
+  lcd.setTextFont(1);
 }
 
 static void show_swl(void)
 {
-  lcd.setTextSize(2);
+  lcd.setTextSize(1);
+  lcd.setFreeFont(&FreeSansBold9pt7b);
   lcd.setCursor(POS_TX_X,POS_TX_Y);
   lcd.setTextColor(radio.tx_button?LCD_RED:LCD_GREEN);
   lcd.print("TX");
   lcd.setCursor(POS_RX_X,POS_RX_Y);
   lcd.setTextColor(radio.tx_button?LCD_RED:LCD_GREEN);
   lcd.print("RX");
+  lcd.setTextFont(1);
 }
 
 static void show_rx_tx(void)
@@ -1602,7 +1615,8 @@ static void show_menu(void)
   }
   lcd.fillRect(POS_MENU_X,POS_MENU_Y,MENU_WIDTH,MENU_HEIGHT,LCD_BLACK);
   lcd.drawRect(POS_MENU_X,POS_MENU_Y,MENU_WIDTH,MENU_HEIGHT,LCD_WHITE),
-  lcd.setTextSize(2);
+  lcd.setTextSize(1);
+  lcd.setFreeFont(&FreeSansBold9pt7b);
   if (menu_button_action==MENU_NONE) // MENU_MENU_SELECT
   {
     // display top level menu
@@ -1626,7 +1640,7 @@ static void show_menu(void)
       {
         lcd.setTextColor(LCD_WHITE);
       }
-      lcd.setCursor(POS_MENU_X+4,POS_MENU_Y+20*j+4);
+      lcd.setCursor(POS_MENU_X+5,POS_MENU_Y+20*j+16);
       lcd.print(sz_menu_name);
     }
   }
@@ -1637,7 +1651,7 @@ static void show_menu(void)
       const uint8_t num_options = menu_options[menu_current].num_options;
       if (option_window<num_options && option_current<num_options)
       {
-        lcd.setCursor(POS_MENU_X+4,POS_MENU_Y+2);
+        lcd.setCursor(POS_MENU_X+5,POS_MENU_Y+16);
         lcd.print(menu_options[menu_current].menu_name);
         for (uint8_t i=option_window,j=1;i<num_options && j<4;i++,j++)
         {
@@ -1659,12 +1673,13 @@ static void show_menu(void)
           {
             lcd.setTextColor(LCD_WHITE);
           }
-          lcd.setCursor(POS_MENU_X+4,POS_MENU_Y+20*j+2);
+          lcd.setCursor(POS_MENU_X+10,POS_MENU_Y+20*j+16);
           lcd.print(sz_option_name);
         }
       }
     }
   }
+  lcd.setTextFont(1);
 }
 
 static void update_display(const uint32_t signal_level = 0u,const int32_t debug_value = 0)
