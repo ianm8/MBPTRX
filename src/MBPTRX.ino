@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 3.4.240
+ * MBPTRX Version 4.1.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -61,6 +61,8 @@
  *  3.2.240 CW decoder - schmitt
  *  3.3.240 spectrum set or adjust
  *  3.4.240 update fonts
+ *  4.0.240 digital mode with Vox
+ *  4.1.240 don't show JNR in DIG mode
  */
 
 //#define DEBUGGING_SKIP
@@ -93,9 +95,11 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V3.4."
+#define VERSION_STRING "  V4.1."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
+#define VOX_LEVEL 100u
+#define VOX_TIMEOUT 250u
 #define BAND_80M 0
 #define BAND_40M 1
 #define BAND_30M 2
@@ -258,6 +262,7 @@ enum radio_mode_t
   MODE_USB,
   MODE_CWL,
   MODE_CWU,
+  MODE_DIG,
   MODE_AM
 };
 
@@ -396,6 +401,8 @@ volatile static bool save_settings_now = false;
 volatile static bool setup_complete = false;
 volatile static bool set_spectrum_level = false;
 volatile static bool adj_spectrum_level = false;
+volatile static bool vox_triggered = false;
+volatile static bool vox_mic_ready = false;
 volatile static char cw_decode_buf[32] = "";
 
 volatile static uint32_t wp = 0;
@@ -517,14 +524,26 @@ static void set_filter(void)
   }
 }
 
-static void display_clear(void)
+static __attribute__((always_inline)) inline void display_clear(void)
 {
   lcd.fillSprite(LCD_BLACK);
 }
 
-static void display_refresh(void)
+static __attribute__((always_inline)) inline void display_refresh(void)
 {
   lcd.pushSprite(0,0);
+}
+
+static __attribute__((always_inline)) inline void enable_mic(void)
+{
+  adc_gpio_init(PIN_MIC);
+  adc_select_input(MIC_MUX);
+}
+
+static __attribute__((always_inline)) inline void disable_mic(void)
+{
+  pinMode(PIN_MIC,OUTPUT);
+  digitalWrite(PIN_MIC,LOW);
 }
 
 void __not_in_flash_func(adc_interrupt_handler)(void)
@@ -658,6 +677,7 @@ static void set_frequency(void)
   {
     case MODE_LSB: rx_ssboffset = +ssboffset;      break;
     case MODE_USB: rx_ssboffset = -ssboffset;      break;
+    case MODE_DIG: rx_ssboffset = -ssboffset;      break;
     case MODE_AM:  rx_ssboffset = -(SAMPLERATE/4); break;
     case MODE_CWL: rx_cwoffsetw = +cwoffset;       break;
     case MODE_CWU: rx_cwoffsetw = -cwoffset;       break;
@@ -846,8 +866,7 @@ void setup(void)
   init_adc();
 
   // disable Mic in RX mode
-  pinMode(PIN_MIC,OUTPUT);
-  digitalWrite(PIN_MIC,LOW);
+  disable_mic();
 
   // init LCD
   char sz_version[16] = "";
@@ -1179,13 +1198,14 @@ static void show_mode(void)
   const char *sz_mode = "XXX";
   if (radio.tx_enable)
   {
-    // TX in AM is always narrow
+    // no TX in AM
     switch (radio.mode)
     {
       case MODE_LSB: sz_mode = "LSB"; break;
       case MODE_USB: sz_mode = "USB"; break;
       case MODE_CWL: sz_mode = "CWL"; break;
       case MODE_CWU: sz_mode = "CWU"; break;
+      case MODE_DIG: sz_mode = "DIG"; break;
     }
   }
   else
@@ -1196,6 +1216,7 @@ static void show_mode(void)
       case MODE_USB: sz_mode = "USB"; break;
       case MODE_CWL: sz_mode = "CWL"; break;
       case MODE_CWU: sz_mode = "CWU"; break;
+      case MODE_DIG: sz_mode = "DIG"; break;
       case MODE_AM:  sz_mode = "AM";  break;
     }
   }
@@ -1254,6 +1275,11 @@ static void show_jnr(void)
 {
   if (radio.jnrlevel==0)
   {
+    return;
+  }
+  if (radio.mode==MODE_DIG)
+  {
+    // no JNR for Dig mode
     return;
   }
   lcd.fillRect(POS_JNR_X-5,POS_JNR_Y-1,45,10,LCD_PURPLE);
@@ -1348,7 +1374,17 @@ static void show_cessb_settings(void)
   }
   else
   {
-    if (radio.mode==MODE_LSB || radio.mode==MODE_USB)
+    if (radio.mode==MODE_DIG)
+    {
+      lcd.setTextSize(1);
+      lcd.setTextColor(LCD_GREEN);
+      lcd.setCursor(POS_CESSB_MIC_X,POS_CESSB_MIC_Y);
+      lcd.print("Vox:On");
+      lcd.print(" BW:3000Hz");
+      lcd.print(" CESSB:Off");
+      lcd.print(" NB:Off");
+    }
+    else if (radio.mode==MODE_LSB || radio.mode==MODE_USB)
     {
       lcd.setTextSize(1);
       lcd.setTextColor(LCD_GREEN);
@@ -1451,6 +1487,14 @@ static void show_spectrum(void)
         }
         break;
       }
+      case MODE_DIG:
+      {
+        for (uint32_t x=0;x<25;x++)
+        {
+          lcd.drawLine(POS_CENTER_RIGHT+x,POS_WATER_Y,POS_CENTER_RIGHT+x,POS_WATER_Y+31,LCD_MODE);
+        }
+        break;
+      }
       case MODE_CWL:
       {
         for (uint32_t x=0;x<5;x++)
@@ -1485,6 +1529,14 @@ static void show_spectrum(void)
       case MODE_USB:
       {
         for (uint32_t x=0;x<20;x++)
+        {
+          lcd.drawLine(POS_CENTER_RIGHT+x+USB_OFFSET,POS_WATER_Y,POS_CENTER_RIGHT+x+USB_OFFSET,POS_WATER_Y+31,LCD_MODE);
+        }
+        break;
+      }
+      case MODE_DIG:
+      {
+        for (uint32_t x=0;x<25;x++)
         {
           lcd.drawLine(POS_CENTER_RIGHT+x+USB_OFFSET,POS_WATER_Y,POS_CENTER_RIGHT+x+USB_OFFSET,POS_WATER_Y+31,LCD_MODE);
         }
@@ -1871,14 +1923,19 @@ void __not_in_flash_func(loop)(void)
       {
         volatile const uint32_t cpu_start = time_us_32();
         adc_value_ready = false;
+        if (radio.mode==MODE_DIG && vox_mic_ready && abs(adc_value)>VOX_LEVEL)
+        {
+          vox_triggered = true;
+        }
         int16_t tx_i = 0;
         int16_t tx_q = 0;
         switch (radio.mode)
         {
           case MODE_LSB: DSP::process_mic(adc_value,tx_q,tx_i,mic_gain,radio.micproc,radio.cessb); break;
           case MODE_USB: DSP::process_mic(adc_value,tx_i,tx_q,mic_gain,radio.micproc,radio.cessb); break;
-          case MODE_CWL: CW::process_cw(radio.keydown,tx_i,tx_q); break;
-          case MODE_CWU: CW::process_cw(radio.keydown,tx_i,tx_q); break;
+          case MODE_DIG: DSP::process_dig(adc_value,tx_i,tx_q);                                    break;
+          case MODE_CWL: CW::process_cw(radio.keydown,tx_i,tx_q);                                  break;
+          case MODE_CWU: CW::process_cw(radio.keydown,tx_i,tx_q);                                  break;
         }
         tx_i = (int16_t)((float)tx_i * tx_level / 100.0f);
         tx_q = (int16_t)((float)tx_q * tx_level / 100.0f);
@@ -1892,7 +1949,7 @@ void __not_in_flash_func(loop)(void)
         adc_data_q[adc_sample_p] = tx_q<<5;
         adc_sample_p++;
         adc_sample_p &= (MAX_ADC_SAMPLES-1);
-        if (radio.mode==MODE_LSB || radio.mode==MODE_USB)
+        if (radio.mode==MODE_LSB || radio.mode==MODE_USB || radio.mode==MODE_DIG)
         {
           if (millis()>tx_peak_delay)
           {
@@ -1939,8 +1996,14 @@ void __not_in_flash_func(loop)(void)
     else
     {
       // switched to RX
-      pinMode(PIN_MIC,OUTPUT);
-      digitalWrite(PIN_MIC,LOW);
+      if (radio.mode==MODE_DIG)
+      {
+        enable_mic();
+      }
+      else
+      {
+        disable_mic();
+      }
       // set TX output to zero in receive mode
       dac_value_i_p = 0;
       dac_value_i_n = 0;
@@ -1955,8 +2018,7 @@ void __not_in_flash_func(loop)(void)
     if (radio.tx_enable)
     {
       // switch to TX
-      adc_gpio_init(PIN_MIC);
-      adc_select_input(MIC_MUX);
+      enable_mic();
       mic_gain = (float)radio.micgain / 100.0f;
       tx_peak_delay = millis() + 100u;
       tx = true;
@@ -1967,6 +2029,10 @@ void __not_in_flash_func(loop)(void)
       {
         volatile const uint32_t cpu_start = time_us_32();
         adc_value_ready = false;
+        if (radio.mode==MODE_DIG && vox_mic_ready && abs(adc_value)>VOX_LEVEL)
+        {
+          vox_triggered = true;
+        }
         if (i2s.available())
         {
           int32_t ii = 0;
@@ -1990,6 +2056,7 @@ void __not_in_flash_func(loop)(void)
             case MODE_AM:  dac_audio = DSP::process_am(ii,qq,jnr);        break;
             case MODE_CWL: dac_audio = DSP::process_cw(qq,ii,cwsig);      break;
             case MODE_CWU: dac_audio = DSP::process_cw(ii,qq,cwsig);      break;
+            case MODE_DIG: dac_audio = DSP::process_dig(ii,qq);           break;
           }
           dac_audio = constrain(dac_audio,-2048l,+2047l);
           dac_audio += 2048l;
@@ -2096,7 +2163,7 @@ static void process_spectrum(void)
   }
 }
 
-static void process_ssb_tx(void)
+static void enable_ssb_tx(void)
 {
   // 1. mute the receiver
   // 2. set TX/RX relay to TX
@@ -2125,7 +2192,10 @@ static void process_ssb_tx(void)
   delay(50);
   bpf_port.output(I2C_PIN_TXN,TCA9534::Level::L);
   digitalWrite(PIN_TXBIAS,HIGH);
+}
 
+static void ptt_release(void)
+{
   // wait for PTT release
   uint32_t tx_display_update = 0;
   while (digitalRead(PIN_PTT)==LOW)
@@ -2140,6 +2210,23 @@ static void process_ssb_tx(void)
       update_display(mic_peak_level);
       tx_display_update = now + 50ul;
     }
+  }
+}
+
+static void process_vox_tx(void)
+{
+  // wait for PTT release
+  uint32_t tx_display_update = 0;
+
+  // spectrum data is mic input
+  process_spectrum();
+
+  // update display
+  const uint32_t now = millis();
+  if (now>tx_display_update)
+  {
+    update_display(mic_peak_level);
+    tx_display_update = now + 50ul;
   }
 }
 
@@ -2322,6 +2409,7 @@ void loop1(void)
         case OPTION_MODE_USB:        radio.mode = MODE_USB; radio.mode_auto = false; break;
         case OPTION_MODE_CWL:        radio.mode = MODE_CWL; radio.mode_auto = false; break;
         case OPTION_MODE_CWU:        radio.mode = MODE_CWU; radio.mode_auto = false; break;
+        case OPTION_MODE_DIG:        radio.mode = MODE_DIG; radio.mode_auto = false; break;
         case OPTION_MODE_AM:         radio.mode = MODE_AM;  radio.mode_auto = false; break;
         case OPTION_MODE_AUTO:       radio.mode_auto = true;                         break;
         case OPTION_STEP_10:         radio.step = 10U;                               break;
@@ -2500,9 +2588,22 @@ void loop1(void)
       }
 
       // update frequency if mode changes
+      // delay enabling Mic for Vox
       if (radio.mode!=old_mode)
       {
         old_mode = radio.mode;
+        vox_mic_ready = false;
+        vox_triggered = false;
+        if (radio.mode==MODE_DIG)
+        {
+          enable_mic();
+          delay(100);
+          vox_mic_ready = true;
+        }
+        else
+        {
+          disable_mic();
+        }
         set_frequency();
       }
 
@@ -2675,15 +2776,16 @@ void loop1(void)
   }
 
   // check for PTT
-  const bool b_PTT = (digitalRead(PIN_PTT)==LOW);
-  const bool b_PADA = (digitalRead(PIN_PADA)==LOW);
-  const bool b_PADB = (digitalRead(PIN_PADB)==LOW);
+  const bool b_PTT = (radio.mode!=MODE_DIG && digitalRead(PIN_PTT)==LOW);
+  const bool b_PADA = (radio.mode!=MODE_DIG && digitalRead(PIN_PADA)==LOW);
+  const bool b_PADB = (radio.mode!=MODE_DIG && digitalRead(PIN_PADB)==LOW);
   radio.tx_button = (b_PTT || b_PADA || b_PADB);
-  if ((radio.band == BAND_SWL) || (radio.mode == MODE_AM))
+  if ((radio.band==BAND_SWL) || (radio.mode==MODE_AM))
   {
+    // capture TX button before returning
     return;
   }
-  if (radio.tx_button)
+  if (radio.tx_button || vox_triggered)
   {
     const float saved_agc = DSP::agc_peak;
     radio.menu_active = false;
@@ -2700,7 +2802,30 @@ void loop1(void)
     }
     else if (b_PTT)
     {
-      process_ssb_tx();
+      enable_ssb_tx();
+      ptt_release();
+    }
+    else if (vox_triggered)
+    {
+      // wait for Vox to time out
+      vox_triggered = false;
+      enable_ssb_tx();
+      uint32_t now = millis();
+      uint32_t vox_timeout = now + VOX_TIMEOUT;
+      while (now < vox_timeout)
+      {
+        process_vox_tx();
+        now = millis();
+        if (vox_triggered)
+        {
+          vox_triggered = false;
+          vox_timeout = now + VOX_TIMEOUT;
+        }
+      }
+    }
+    if (vox_triggered)
+    {
+      vox_triggered = false;
     }
 
     // back to receive

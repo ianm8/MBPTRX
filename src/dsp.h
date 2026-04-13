@@ -203,6 +203,48 @@ namespace DSP
     return agc(audio_out * 32768.0f);
   }
 
+  static const int16_t __not_in_flash_func(process_dig)(const int16_t in_i,const int16_t in_q)
+  {
+    // quadrature mixer
+
+    // quadrature LO = 3906 (quadrature: 31250/8/4 = 2)
+    // quadrature LO = 1953 (quadrature: 31250/16/4 = 4)
+    // quadrature LO = 977 (quadrature: 31250/32/4 = 8)
+    // quadrature LO = 488 (quadrature: 31250/64/4 = 16)
+    static const uint8_t PI2 = 16u;
+    volatile static uint8_t lo = 0;
+    const uint8_t I_index = lo;
+    const uint8_t Q_index = lo + PI2;
+    const float loI = UTIL::s64[I_index];
+    const float loQ = UTIL::s64[Q_index];
+    lo++;
+
+    // remove DC
+    float ii = FILTER::dc1f((float)in_i / 32768.0f);
+    float qq = FILTER::dc2f((float)in_q / 32768.0f);
+
+    // quadrature down-convert
+    const float a = ii * loQ;
+    const float b = qq * loI;
+    const float c = qq * loQ;
+    const float d = ii * loI;
+    const float mxI = a - b;
+    const float mxQ = c + d;
+
+    // phase shift IQ +/- 45
+    const float p45 = FILTER::fap1f(mxI);
+    const float n45 = FILTER::fap2f(mxQ);
+
+    // reject image
+    const float ssb = p45 - n45;
+
+    // LPF
+    const float audio_out = FILTER::lpf_3000f_rx(ssb);
+
+    // AGC returns 12 bit value
+    return agc(audio_out * 32768.0f);
+  }
+
   static const int16_t __not_in_flash_func(process_cw)(const int16_t in_i,const int16_t in_q,float &sig)
   {
     // remove DC
@@ -353,6 +395,24 @@ namespace DSP
     float ii = FILTER::fap1f(mic_sig);
     float qq = FILTER::fap2f(mic_sig);
     if (cessb_on) cessb(ii,qq);
+    out_i = (int16_t)(ii * 512.0f);
+    out_q = (int16_t)(qq * 512.0f);
+  }
+
+  static const void __not_in_flash_func(process_dig)(const int16_t s,int16_t &out_i,int16_t &out_q)
+  {
+    // input is 12 bits
+    // convert to float
+    // remove DC
+    // 3000 Hz LPF 
+    // phase shift I
+    // phase shift Q
+    // convert to int
+    // output is 10 bits
+    const float ac_sig = FILTER::dcf(((float)s)*(1.0f/2048.0f));
+    const float lp_sig = FILTER::lpf_3000f_tx(ac_sig);
+    float ii = FILTER::fap1f(lp_sig);
+    float qq = FILTER::fap2f(lp_sig);
     out_i = (int16_t)(ii * 512.0f);
     out_q = (int16_t)(qq * 512.0f);
   }
