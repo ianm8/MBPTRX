@@ -45,4 +45,6 @@
  * 3.2.240 CW decoder - schmitt
  * 3.3.240 spectrum set or adjust
  * 3.4.240 update fonts
+ * 4.0.240 digital mode with Vox
+ * 4.1.240 don't show JNR in DIG mode
 
