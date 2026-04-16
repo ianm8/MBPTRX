@@ -69,7 +69,8 @@ enum option_value_t
   OPTION_MODE_LSB,
   OPTION_MODE_CWL,
   OPTION_MODE_CWU,
-  OPTION_MODE_DIG,
+  OPTION_MODE_DGL,
+  OPTION_MODE_DGU,
   OPTION_MODE_AM,
   OPTION_MODE_AUTO,
   OPTION_BAND_80M,
@@ -195,17 +196,17 @@ menu_options[NUM_MENU_ITEMS] =
   {
     MENU_MODE,
     "Mode",
-    8U,
+    9U,
     {
       {OPTION_MODE_LSB,"LSB"},
       {OPTION_MODE_USB,"USB"},
       {OPTION_MODE_CWL,"CWL"},
       {OPTION_MODE_CWU,"CWU"},
-      {OPTION_MODE_DIG,"DIG"},
+      {OPTION_MODE_DGL,"DGL"},
+      {OPTION_MODE_DGU,"DGU"},
       {OPTION_MODE_AM,"AM"},
       {OPTION_MODE_AUTO,"AUTO"},
       {OPTION_EXIT,"Exit"},
-      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
