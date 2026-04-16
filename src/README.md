@@ -47,4 +47,5 @@
  * 3.4.240 update fonts
  * 4.0.240 digital mode with Vox
  * 4.1.240 don't show JNR in DIG mode
-
+ * 4.2.240 lower sideband digital
+ * 4.3.240 TX guard on startup
