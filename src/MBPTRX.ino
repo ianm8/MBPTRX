@@ -2816,7 +2816,7 @@ void loop1(void)
   const bool digital = (radio.mode==MODE_DGL || radio.mode==MODE_DGU);
   const bool b_PTT = (!digital && radio.tx_safe && digitalRead(PIN_PTT)==LOW);
   const bool b_PADA = (!digital && radio.tx_safe && digitalRead(PIN_PADA)==LOW);
-  const bool b_PADB = (!!digital && radio.tx_safe && digitalRead(PIN_PADB)==LOW);
+  const bool b_PADB = (!digital && radio.tx_safe && digitalRead(PIN_PADB)==LOW);
   radio.tx_button = (b_PTT || b_PADA || b_PADB);
   if ((radio.band==BAND_SWL) || (radio.mode==MODE_AM))
   {
