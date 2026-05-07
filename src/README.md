@@ -49,3 +49,4 @@
  * 4.1.240 don't show JNR in DIG mode
  * 4.2.240 lower sideband digital
  * 4.3.240 TX guard on startup
+ * 4.4.240 minor update to spectrum processing
