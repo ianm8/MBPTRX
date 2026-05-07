@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 4.3.240
+ * MBPTRX Version 4.4.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -65,6 +65,7 @@
  *  4.1.240 don't show JNR in DIG mode
  *  4.2.240 lower sideband digital
  *  4.3.240 TX guard on startup
+ *  4.4.240 minor update to spectrum processing
  */
 
 //#define DEBUGGING_SKIP
@@ -97,7 +98,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V4.3."
+#define VERSION_STRING "  V4.4."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -249,6 +250,7 @@
 
 // two buffers of 1024 FFT bins
 #define MAX_ADC_SAMPLES 2048
+#define SPECTRUM_BUFFER 1024
 #define WATERFALL_ROWS 41
 
 #define ERROR_SYSCLOCK 3u
@@ -2171,28 +2173,34 @@ void __not_in_flash_func(loop)(void)
 
 static void process_spectrum(void)
 {
-  int16_t data_re[1024] = {0};
-  int16_t data_im[1024] = {0};
+  static uint32_t last_offset = UINT32_MAX;
+  uint32_t offset = 0;
   const int8_t ga = (radio.mode==MODE_DGL || radio.mode==MODE_DGU)?-3:0;
   const int8_t gain = radio.tx_enable?ga:radio.level[radio.band];
   const uint32_t sample_p = adc_sample_p;
   if (sample_p<800)
   {
     // first half is in use, get the second half
-    for (uint32_t i=0;i<1024;i++)
-    {
-      data_re[i] = adc_data_i[i+1024];
-      data_im[i] = adc_data_q[i+1024];
-    }
-    spectrum::process(data_re,data_im,magnitude,gain);
+    offset = SPECTRUM_BUFFER;
   }
   else if (sample_p>1023 && sample_p<1800)
   {
     // second half is in use, get the first half
-    for (uint32_t i=0;i<1024;i++)
+    offset = 0;
+  }
+  else
+  {
+    return;
+  }
+  if (offset != last_offset)
+  {
+    last_offset = offset;
+    int16_t data_re[SPECTRUM_BUFFER] = {0};
+    int16_t data_im[SPECTRUM_BUFFER] = {0};
+    for (uint32_t i=0;i<SPECTRUM_BUFFER;i++)
     {
-      data_re[i] = adc_data_i[i];
-      data_im[i] = adc_data_q[i];
+      data_re[i] = adc_data_i[i+offset];
+      data_im[i] = adc_data_q[i+offset];
     }
     spectrum::process(data_re,data_im,magnitude,gain);
   }
