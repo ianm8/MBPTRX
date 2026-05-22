@@ -1,8 +1,9 @@
 /*
- * MBPTRX Version 4.4.240
+ * MBPTRX Version 5.0.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
+ *   (unless otherwise indicated)
  *
  * Libraries
  *
@@ -66,6 +67,7 @@
  *  4.2.240 lower sideband digital
  *  4.3.240 TX guard on startup
  *  4.4.240 minor update to spectrum processing
+ *  5.0.240 FT8 built in
  */
 
 //#define DEBUGGING_SKIP
@@ -85,20 +87,23 @@
 #include "cw.h"
 #include "cwdecode1.h"
 #include "cwdecode2.h"
+#include "ft8.h"
+#include "ft8ui.h"
 #include "hardware/pwm.h"
 #include "hardware/adc.h"
 #include "hardware/vreg.h"
 #include "ArialBold14pt7b.h"
 #include "ArialBold16pt7b.h"
 
-//#define YOUR_CALL "VK7IAN"
+#define YOUR_CALL "VK7IAN"
+#define YOUR_GRID "QE36"
 #define POS_CALL_X 70
 
 #if SI5351_PLL_VCO_MIN != 440000000
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V4.4."
+#define VERSION_STRING "  V5.0."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -131,6 +136,9 @@
 #define SPECTRUM_LEVEL_MAX 4
 #define LPF_I2C_ADDRESS 0x20U
 #define BPF_I2C_ADDRESS 0x21U
+
+// sets FT8 output power (max 511)
+#define FT8_TX_MAX 127u 
 
 #define PIN_PTT      0 // Mic PTT (active low)
 #define PIN_ENCBUT   1 // on rotary
@@ -253,6 +261,8 @@
 #define SPECTRUM_BUFFER 1024
 #define WATERFALL_ROWS 41
 
+static_assert((MAX_ADC_SAMPLES & (MAX_ADC_SAMPLES - 1)) == 0, "MAX_ADC_SAMPLES must be a power of 2");
+
 #define ERROR_SYSCLOCK 3u
 #define ERROR_SI5351   4u
 #define ERROR_LPF      5u
@@ -268,6 +278,7 @@ enum radio_mode_t
   MODE_CWU,
   MODE_DGL,
   MODE_DGU,
+  MODE_FT8,
   MODE_AM
 };
 
@@ -398,9 +409,11 @@ volatile static int32_t dac_value_q_n = 0;
 volatile static int16_t adc_value = 0;
 volatile static bool adc_value_ready = false;
 volatile static uint32_t adc_sample_p = 0;
+volatile static uint32_t ft8_sample_p = 0;
 volatile static uint32_t mic_peak_level = 0;
 volatile static int16_t adc_data_i[MAX_ADC_SAMPLES] = {0};
 volatile static int16_t adc_data_q[MAX_ADC_SAMPLES] = {0};
+volatile static float ft8_data[FT8_FFT_SIZE] = {0.0f};
 volatile static float mic_gain = 0.0f;
 volatile static bool dit_latched = false;
 volatile static bool dah_latched = false;
@@ -672,7 +685,7 @@ static void restore_settings(void)
   EEPROM.end();
 }
 
-static void set_frequency(void)
+static void set_frequency(const uint32_t ft8_offset = 0u)
 {
   volatile static uint32_t old_quadrature_divisor = 0u;
   const uint32_t quadrature_divisor = UTIL::quadrature_divisor(radio.frequency);
@@ -686,12 +699,13 @@ static void set_frequency(void)
     case MODE_USB: rx_ssboffset = -ssboffset;      break;
     case MODE_DGL: rx_ssboffset = +ssboffset;      break;
     case MODE_DGU: rx_ssboffset = -ssboffset;      break;
+    case MODE_FT8: rx_ssboffset = -ssboffset;      break;
     case MODE_AM:  rx_ssboffset = -(SAMPLERATE/4); break;
     case MODE_CWL: rx_cwoffsetw = +cwoffset;       break;
     case MODE_CWU: rx_cwoffsetw = -cwoffset;       break;
   }
-  const uint64_t f = SI5351_FREQ_MULT * (radio.frequency+rx_ssboffset+rx_cwoffsetw);
-  const uint64_t p = SI5351_FREQ_MULT * (radio.frequency+rx_ssboffset+rx_cwoffsetw)*quadrature_divisor;
+  const uint64_t f = SI5351_FREQ_MULT * (radio.frequency+rx_ssboffset+rx_cwoffsetw) + ft8_offset;
+  const uint64_t p = f * quadrature_divisor;
   SI5351.set_freq_manual(f,p,SI5351_CLK0);
   SI5351.set_freq_manual(f,p,SI5351_CLK1);
   if (old_quadrature_divisor != quadrature_divisor)
@@ -923,11 +937,7 @@ void setup(void)
   lcd.print(sz_version);
   lcd.setFreeFont(&FreeSansBold18pt7b);
   lcd.setCursor(POS_CALL_X,POS_SPLASH_Y);
-#ifdef YOUR_CALL
   lcd.print(YOUR_CALL);
-#else
-  lcd.print("VK7IAN");
-#endif
   lcd.pushSprite(0,0);
   lcd.setTextFont(1);
 
@@ -1222,6 +1232,7 @@ static void show_mode(void)
       case MODE_CWU: sz_mode = "CWU"; break;
       case MODE_DGL: sz_mode = "DGL"; break;
       case MODE_DGU: sz_mode = "DGU"; break;
+      case MODE_FT8: sz_mode = "FT8"; break;
     }
   }
   else
@@ -1234,6 +1245,7 @@ static void show_mode(void)
       case MODE_CWU: sz_mode = "CWU"; break;
       case MODE_DGL: sz_mode = "DGL"; break;
       case MODE_DGU: sz_mode = "DGU"; break;
+      case MODE_FT8: sz_mode = "FT8"; break;
       case MODE_AM:  sz_mode = "AM";  break;
     }
   }
@@ -1294,9 +1306,9 @@ static void show_jnr(void)
   {
     return;
   }
-  if (radio.mode==MODE_DGU || radio.mode==MODE_DGL)
+  if (radio.mode==MODE_DGU || radio.mode==MODE_DGL || radio.mode==MODE_FT8)
   {
-    // no JNR for Dig mode
+    // no JNR for digital modes
     return;
   }
   lcd.fillRect(POS_JNR_X-5,POS_JNR_Y-1,45,10,LCD_PURPLE);
@@ -1391,7 +1403,17 @@ static void show_cessb_settings(void)
   }
   else
   {
-    if (radio.mode==MODE_DGU || radio.mode==MODE_DGL)
+    if (radio.mode==MODE_FT8)
+    {
+      lcd.setTextSize(1);
+      lcd.setTextColor(LCD_GREEN);
+      lcd.setCursor(POS_CESSB_MIC_X,POS_CESSB_MIC_Y);
+      lcd.print("AGC:Off");
+      lcd.print(" BW:3000Hz");
+      lcd.print(" CESSB:Off");
+      lcd.print(" NB:Off");
+    }
+    else if (radio.mode==MODE_DGU || radio.mode==MODE_DGL)
     {
       lcd.setTextSize(1);
       lcd.setTextColor(LCD_GREEN);
@@ -1520,6 +1542,14 @@ static void show_spectrum(void)
         }
         break;
       }
+      case MODE_FT8:
+      {
+        for (uint32_t x=0;x<25;x++)
+        {
+          lcd.drawLine(POS_CENTER_RIGHT+x,POS_WATER_Y,POS_CENTER_RIGHT+x,POS_WATER_Y+31,LCD_MODE);
+        }
+        break;
+      }
       case MODE_CWL:
       {
         for (uint32_t x=0;x<5;x++)
@@ -1568,6 +1598,14 @@ static void show_spectrum(void)
         break;
       }
       case MODE_DGU:
+      {
+        for (uint32_t x=0;x<25;x++)
+        {
+          lcd.drawLine(POS_CENTER_RIGHT+x+USB_OFFSET,POS_WATER_Y,POS_CENTER_RIGHT+x+USB_OFFSET,POS_WATER_Y+31,LCD_MODE);
+        }
+        break;
+      }
+      case MODE_FT8:
       {
         for (uint32_t x=0;x<25;x++)
         {
@@ -1970,6 +2008,7 @@ void __not_in_flash_func(loop)(void)
           case MODE_DGU: DSP::process_dig(adc_value,tx_i,tx_q);                                    break;
           case MODE_CWL: CW::process_cw(radio.keydown,tx_i,tx_q);                                  break;
           case MODE_CWU: CW::process_cw(radio.keydown,tx_i,tx_q);                                  break;
+          case MODE_FT8: tx_i = tx_q = FT8_TX_MAX;                                                 break;
         }
         tx_i = (int16_t)((float)tx_i * tx_level / 100.0f);
         tx_q = (int16_t)((float)tx_q * tx_level / 100.0f);
@@ -1981,8 +2020,7 @@ void __not_in_flash_func(loop)(void)
         dac_value_q_n = 511-tx_q;
         adc_data_i[adc_sample_p] = tx_i<<5;
         adc_data_q[adc_sample_p] = tx_q<<5;
-        adc_sample_p++;
-        adc_sample_p &= (MAX_ADC_SAMPLES-1);
+        adc_sample_p = (adc_sample_p+1) & (MAX_ADC_SAMPLES-1);
         if (radio.mode==MODE_LSB || radio.mode==MODE_USB ||
           radio.mode==MODE_DGL || radio.mode==MODE_DGU)
         {
@@ -2004,23 +2042,26 @@ void __not_in_flash_func(loop)(void)
           dac_h = dac_audio >> 6;
           dac_l = dac_audio & 0x3f;
         }
-        // only change TX level in TX mode
-        static int32_t rotary = 0l;
-        switch (r.process())
+        if (radio.mode!=MODE_FT8)
         {
-          case DIR_CW:  rotary++; break;
-          case DIR_CCW: rotary--; break;
-        }
-        if (rotary!=0)
-        {
-          // don't hang around if we can't own the mutex immediately
-          // rotary will record any rotations
-          if (mutex_try_enter(&rotary_mutex,0ul))
+          // only change TX level in TX mode
+          static int32_t rotary = 0l;
+          switch (r.process())
           {
-            tx_level += (float)rotary;
-            rotary = 0;
-            mutex_exit(&rotary_mutex);
-            tx_level = constrain(tx_level,0.0f,100.0f);
+            case DIR_CW:  rotary++; break;
+            case DIR_CCW: rotary--; break;
+          }
+          if (rotary!=0)
+          {
+            // don't hang around if we can't own the mutex immediately
+            // rotary will record any rotations
+            if (mutex_try_enter(&rotary_mutex,0ul))
+            {
+              tx_level += (float)rotary;
+              rotary = 0;
+              mutex_exit(&rotary_mutex);
+              tx_level = constrain(tx_level,0.0f,100.0f);
+            }
           }
         }
         volatile const uint32_t cpu_end = time_us_32();
@@ -2077,9 +2118,9 @@ void __not_in_flash_func(loop)(void)
           qq >>= 16;
           adc_data_i[adc_sample_p] = (int16_t)ii;
           adc_data_q[adc_sample_p] = (int16_t)qq;
-          adc_sample_p++;
-          adc_sample_p &= (MAX_ADC_SAMPLES-1);
+          adc_sample_p = (adc_sample_p+1) & (MAX_ADC_SAMPLES-1);
           int32_t dac_audio = 0;
+          float ft8_audio = 0.0f;
           float cwsig = 0.0f;
           const uint8_t jnr = radio.jnrlevel;
           const uint8_t nb = radio.nblevel;
@@ -2093,9 +2134,25 @@ void __not_in_flash_func(loop)(void)
             case MODE_CWU: dac_audio = DSP::process_cw(ii,qq,cwsig);      break;
             case MODE_DGL: dac_audio = DSP::process_dig(qq,ii);           break;
             case MODE_DGU: dac_audio = DSP::process_dig(ii,qq);           break;
+            case MODE_FT8: ft8_audio = DSP::process_ft8(ii,qq);           break;
           }
-          dac_audio = constrain(dac_audio,-2048l,+2047l);
-          dac_audio += 2048l;
+          if (radio.mode==MODE_FT8)
+          {
+            dac_audio = 2048l;
+            volatile static struct {uint32_t c : 2; } downsample = { 0 };
+            if (downsample.c == 0)
+            {
+              // note, ft8_data is two buffers of FT8_FFT_SIZE/2 values
+              ft8_data[ft8_sample_p] = ft8_audio;
+              ft8_sample_p = (ft8_sample_p + 1) % FT8_FFT_SIZE;
+            }
+            downsample.c++;
+          }
+          else
+          {
+            dac_audio = constrain(dac_audio,-2048l,+2047l);
+            dac_audio += 2048l;
+          }
           dac_h = dac_audio >> 6;
           dac_l = dac_audio & 0x3f;
           if (radio.cwdecode!=0)
@@ -2205,6 +2262,7 @@ static void process_spectrum(void)
     spectrum::process(data_re,data_im,magnitude,gain);
   }
 }
+
 
 static void enable_ssb_tx(void)
 {
@@ -2415,9 +2473,1762 @@ static const radio_mode_t get_mode_auto(void)
   return MODE_USB;
 }
 
+/*
+ * FT8 processing
+ */
+
+//------------------------------------------------------------------------------
+// FT8 STATIC DATA
+//------------------------------------------------------------------------------
+static monitor_t ft8mon = { 0 };
+
+// Rolling history ring buffer - accumulates across slots, never cleared
+static ft8_history_entry_t ft8_history[FT8_HISTORY_SIZE] = { 0 };
+static uint32_t ft8_history_count = 0;
+static uint32_t ft8_history_head = 0;
+
+// Frozen display snapshot - taken when user first touches the rotary
+static ft8_history_entry_t ft8_display_buf[FT8_HISTORY_SIZE] = { 0 };
+static uint32_t ft8_display_count = 0;
+
+// UI state
+static bool ft8_new_available = false; // new decodes since last freeze
+static ft8_ui_state_t ft8_ui_state = FT8_UI_AUTO;
+static int32_t ft8_cursor = 0; // selected line in browse mode
+static uint32_t ft8_last_interaction = 0; // millis() of last rotary/button
+
+// Selected message for TX
+static ft8_selected_t ft8_selected = { 0 };
+
+// show QSO after completion
+static ft8_qso_t ft8_qso = { 0 };
+static uint32_t ft8_qso_display_until = 0;
+static uint32_t ft8_exit_pending_until = 0;
+
+// CQ state
+static ft8_cq_t ft8_cq = { 0 };
+
+//------------------------------------------------------------------------------
+// DISPLAY FUNCTIONS
+//------------------------------------------------------------------------------
+static char ft8_sz_popup[64] = "";
+static char ft8_sz_heading[64] = "";
+static uint32_t ft8_popup_timeout = 0;
+
+static void ft8_set_popup(const char *sz_message,const char *sz_heading = NULL)
+{
+  if (sz_message)
+  {
+    memset(ft8_sz_popup,0,sizeof(ft8_sz_popup));
+    memset(ft8_sz_heading,0,sizeof(ft8_sz_heading));
+    strncpy(ft8_sz_popup,sz_message,sizeof(ft8_sz_popup)-1);
+    if (sz_heading)
+    {
+      strncpy(ft8_sz_heading,sz_heading,sizeof(ft8_sz_heading)-1);
+    }
+    ft8_popup_timeout = millis() + FT8_POPUP_TIME;
+  }
+}
+
+static void ft8_show_popup(void)
+{
+  if (ft8_sz_popup[0] == '\0') return;
+  if (millis() > ft8_popup_timeout)
+  {
+    ft8_sz_popup[0] = '\0';
+    return;
+  }
+
+  // Filled box centred on screen
+  lcd.fillRect(10, 48, 220, 40, LCD_BLUE);
+  lcd.drawRect(10, 48, 220, 40, LCD_WHITE);
+
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+  lcd.setTextColor(LCD_YELLOW, LCD_BLUE);
+  lcd.setCursor(16, 52);
+  lcd.print(ft8_sz_heading[0]=='\0'?"QSO MESSAGE:":ft8_sz_heading);
+
+  lcd.setTextSize(2);
+  lcd.setTextColor(LCD_WHITE, LCD_BLUE);
+  lcd.setCursor(16, 64);
+  lcd.print(ft8_sz_popup);
+
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+}
+
+static void ft8_show_frequency(void)
+{
+  const uint16_t tx_rx = radio.tx_enable?LCD_RED:LCD_WHITE;
+  const uint16_t fcolour = radio.tx_safe?tx_rx:LCD_YELLOW;
+  char sz_frequency[16] = "";
+  memset(sz_frequency,0,sizeof(sz_frequency));
+  ultoa(radio.frequency,sz_frequency,10);
+  if (radio.frequency<1000000u)
+  {
+    // 6 digits
+    //            012 345
+    // 936000 ->  936.000
+    // 012345    01234567
+    sz_frequency[7] = sz_frequency[5];
+    sz_frequency[6] = sz_frequency[4];
+    sz_frequency[5] = sz_frequency[3];
+    sz_frequency[4] = '.';
+    sz_frequency[3] = sz_frequency[2];
+    sz_frequency[2] = sz_frequency[1];
+    sz_frequency[1] = sz_frequency[0];
+    sz_frequency[0] = ' ';
+  }
+  else if (radio.frequency<10000000u)
+  {
+    // 7 digits
+    // 3555000 -> 3.555.000
+    // 0123456    012345678
+    sz_frequency[9] = sz_frequency[6];
+    sz_frequency[8] = sz_frequency[5];
+    sz_frequency[7] = sz_frequency[4];
+    sz_frequency[6] = '.';
+    sz_frequency[5] = sz_frequency[3];
+    sz_frequency[4] = sz_frequency[2];
+    sz_frequency[3] = sz_frequency[1];
+    sz_frequency[2] = '.';
+    sz_frequency[1] = sz_frequency[0];
+    sz_frequency[0] = ' ';
+  }
+  else
+  {
+    // 8 digits
+    // 14222000 -> 14.222.000
+    // 01234567    0123456789
+    sz_frequency[9] = sz_frequency[7];
+    sz_frequency[8] = sz_frequency[6];
+    sz_frequency[7] = sz_frequency[5];
+    sz_frequency[6] = '.';
+    sz_frequency[5] = sz_frequency[4];
+    sz_frequency[4] = sz_frequency[3];
+    sz_frequency[3] = sz_frequency[2];
+    sz_frequency[2] = '.';
+  }
+  lcd.setFreeFont(&Arial_Bold14pt7b);
+  lcd.setTextSize(1);
+  lcd.setTextColor(fcolour,LCD_BLACK);
+  lcd.setCursor(FT8_FREQUENCY_X,FT8_FREQUENCY_Y);
+  lcd.print(sz_frequency);
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+}
+
+static void ft8_show_pulse(void)
+{
+  if (millis() % 1000 < 500)
+  {
+    lcd.setFreeFont(&Arial_Bold14pt7b);
+    lcd.setTextSize(1);
+    lcd.setTextColor(LCD_BLUE,LCD_BLACK);
+    lcd.setCursor(FT8_PULSE_X,FT8_PULSE_Y);
+    lcd.print("*");
+  }
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+}
+
+static void ft8_show_progress(const uint32_t progress)
+{
+  if (progress == 0) return;
+  const uint32_t bar = ((progress>240)?240:progress) - 1;
+  lcd.drawLine(0,132,bar,132,radio.tx_enable?LCD_RED:LCD_GREEN);
+  lcd.drawLine(0,133,bar,133,radio.tx_enable?LCD_RED:LCD_GREEN);
+  lcd.drawLine(0,134,bar,134,radio.tx_enable?LCD_RED:LCD_GREEN);
+}
+
+// Show slot parity indicator and TX/RX status top-right
+static void ft8_show_slot_status(const uint32_t slot_calibrate_ms,const ft8_state_t ft8_state)
+{
+  const uint32_t slot_number = (millis() - slot_calibrate_ms) / FT8_SLOT_MS;
+  const bool even = (slot_number % 2) == 0;
+
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+  lcd.setCursor(FT8_STATUS_X, FT8_STATUS_Y);
+
+  if (ft8_state == FT8_STATE_TRANSMITTING)
+  {
+    lcd.setTextColor(LCD_RED, LCD_BLACK);
+    lcd.print("TX");
+  }
+  else
+  {
+    lcd.setTextColor(LCD_GREEN, LCD_BLACK);
+    lcd.print("RX");
+  }
+
+  // show slot parity
+  lcd.setTextColor(LCD_CYAN, LCD_BLACK);
+  lcd.print(even ? " E" : " O");
+
+  // flash CQ so it's obvious
+  if (ft8_cq.active)
+  {
+    if (millis() % 1000 < 500) 
+    {
+      lcd.setCursor(FT8_CQ_X, FT8_CQ_Y);
+      lcd.setTextColor(LCD_BLACK, LCD_YELLOW);
+      lcd.print("CQ");
+    }
+  }
+}
+
+// Show browse/select position indicator "047/200"
+static void ft8_show_position(void)
+{
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+  lcd.setTextColor(LCD_CYAN, LCD_BLACK);
+  lcd.setCursor(FT8_POSITION_X, FT8_POSITION_Y);
+  char pos[16];
+  snprintf(pos, sizeof(pos), "%3d/%3d", (int)(ft8_cursor + 1), (int)ft8_display_count);
+  lcd.print(pos);
+}
+
+static void ft8_show_tx_frequency(void)
+{
+  if (ft8_cq.active)
+  {
+    lcd.setTextFont(1);
+    lcd.setTextSize(1);
+    lcd.setTextColor(LCD_CYAN, LCD_BLACK);
+    lcd.setCursor(FT8_TXAUDIO_X, FT8_TXAUDIO_Y);
+    lcd.print((uint32_t)ft8_cq.audio_freq);
+    return;
+  }
+  if (ft8_qso.active)
+  {
+    lcd.setTextFont(1);
+    lcd.setTextSize(1);
+    lcd.setTextColor(LCD_CYAN, LCD_BLACK);
+    lcd.setCursor(FT8_TXAUDIO_X, FT8_TXAUDIO_Y);
+    lcd.print((uint32_t)ft8_qso.audio_freq);
+    return;
+  }
+}
+
+// Show [NEW] flash when new decodes arrived since last freeze
+static void ft8_show_new_indicator(void)
+{
+  if (!ft8_new_available) return;
+  if (millis() % 1000 >= 500) return;
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+  lcd.setCursor(FT8_NEW_X,FT8_NEW_Y);
+  lcd.setTextColor(LCD_YELLOW, LCD_BLACK);
+  lcd.print("NEW");
+}
+
+// Main decoded message display
+// AUTO mode: live history, newest 12 entries, no cursor
+// BROWSE/SELECTED: frozen snapshot, scrollable, cursor highlighted
+static void ft8_show_decoded(const uint32_t slot_calibrate_ms)
+{
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+
+  if (ft8_ui_state == FT8_UI_AUTO)
+  {
+
+    // Live view - show newest FT8_DISPLAY_LINES entries from history
+    const int32_t total  = (int32_t)min(ft8_history_count, (uint32_t)FT8_HISTORY_SIZE);
+    if (total == 0)
+    {
+      lcd.setCursor(0, 40);
+      lcd.setTextColor(LCD_DARKGREY, LCD_BLACK);
+      lcd.print("Waiting for FT8 signals...");
+      return;
+    }
+    const int32_t lines_show = (total < (int32_t)FT8_DISPLAY_LINES) ? total : (int32_t)FT8_DISPLAY_LINES;
+    const int32_t from = total - lines_show;   // always >= 0, no underflow possible
+    lcd.setCursor(0, 30);
+    for (int32_t i = from; i < total; i++)
+    {
+      const ft8_history_entry_t* e = ft8_history_get(i);
+      lcd.setTextColor(LCD_WHITE, LCD_BLACK);
+      char buf[FT8_DISPLAY_COLS + 1];
+      strncpy(buf, e->text, FT8_DISPLAY_COLS);
+      buf[FT8_DISPLAY_COLS] = '\0';
+      if (strstr(buf,YOUR_CALL) !=NULL)
+      {
+        lcd.setTextColor(LCD_WHITE, LCD_RED);
+      }
+      else if (strstr(buf,"CQ ") !=NULL)
+      {
+        lcd.setTextColor(LCD_WHITE, LCD_BLUE);
+      }
+      lcd.println(buf);
+    }
+  }
+  else
+  {
+    // Browse/selected mode - frozen snapshot with scrolling cursor
+    // Keep cursor visible: window follows cursor
+    const int32_t total = (int32_t)ft8_display_count;
+    int32_t from = ft8_cursor - FT8_DISPLAY_LINES + 3; // cursor near bottom
+    if (from < 0) from = 0;
+    if (from > total - FT8_DISPLAY_LINES) from = max(0, total - FT8_DISPLAY_LINES);
+
+    // Age warning threshold - entries older than this many slots
+    const uint8_t current_slot_low = (uint8_t)((millis() - slot_calibrate_ms) / FT8_SLOT_MS);
+
+    lcd.setCursor(0, 30);
+    for (int32_t i = from; i < from + FT8_DISPLAY_LINES && i < total; i++)
+    {
+      const ft8_history_entry_t* e = &ft8_display_buf[i];
+      const bool is_cursor   = (i == ft8_cursor);
+      const bool is_selected = (ft8_ui_state == FT8_UI_SELECTED) && is_cursor;
+
+      // Message text (truncated)
+      char buf[FT8_DISPLAY_COLS - 1];
+      memset(buf,0,sizeof(buf));
+      strncpy(buf, e->text, sizeof(buf) - 1);
+      buf[sizeof(buf) - 1] = '\0';
+
+      // Age check: warn if entry is more than 4 slots old
+      const uint8_t age = current_slot_low - e->slot_number_low;
+      const bool is_old = (age > 4);
+      const bool is_cq = strstr(buf,"CQ ") != NULL;
+      const bool is_mycall = strstr(buf,YOUR_CALL) != NULL;
+
+      // Slot parity indicator prefix (1 char)
+      if (is_selected) lcd.setTextColor(LCD_BLACK, LCD_GREEN);
+      else if (is_cursor) lcd.setTextColor(LCD_BLACK, LCD_WHITE);
+      else if (is_mycall) lcd.setTextColor(LCD_WHITE, LCD_RED);
+      else if (is_cq) lcd.setTextColor(LCD_WHITE, LCD_BLUE);
+      else if (is_old) lcd.setTextColor(LCD_DARKGREY, LCD_BLACK);
+      else lcd.setTextColor(LCD_WHITE, LCD_BLACK);
+
+      // Parity prefix: E=even slot, O=odd slot
+      lcd.print(e->received_in_even_slot ? "E" : "O");
+      lcd.print(" ");
+      lcd.println(buf);
+    }
+    lcd.setTextColor(LCD_WHITE, LCD_BLACK); // restore
+    ft8_show_position();
+    ft8_show_new_indicator();
+  }
+}
+
+//------------------------------------------------------------------------------
+// ft8_qso_display()
+// Replaces ft8_show_decoded() during an active QSO.
+// Shows all 6 exchange rows, each colour-coded by state.
+//------------------------------------------------------------------------------
+static void ft8_qso_display(void)
+{
+  lcd.setTextFont(1);
+  lcd.setTextSize(2);
+  lcd.setCursor(0, 30);
+
+  bool any_timeout = false;
+  for (int i = 0; i < ft8_qso.num_rows; i++)
+  {
+    const ft8_qso_row_t* row = &ft8_qso.rows[i];
+    uint16_t fg = 0;
+    uint16_t bg = 0;
+    switch (row->state)
+    {
+      case FT8_QSO_ROW_PENDING: fg = LCD_DARKGREY; bg = LCD_BLACK; break;
+      case FT8_QSO_ROW_CURRENT: fg = LCD_BLACK;    bg = LCD_WHITE; break;
+      case FT8_QSO_ROW_WAITING: fg = LCD_YELLOW;   bg = LCD_BLACK; break;
+      case FT8_QSO_ROW_RETRY:   fg = LCD_PINK;     bg = LCD_BLACK; break;
+      case FT8_QSO_ROW_TIMEOUT: fg = LCD_RED;      bg = LCD_BLACK; break;
+      case FT8_QSO_ROW_DONE:    fg = LCD_GREEN;    bg = LCD_BLACK; break;
+      default:                  fg = LCD_WHITE;    bg = LCD_BLACK; break;
+    }
+    if (row->state == FT8_QSO_ROW_TIMEOUT) any_timeout = true;
+    lcd.setTextColor(fg, bg);
+
+    // Row 0 is the heard CQ (no TX/RX prefix)
+    // Rows 1-5 show TX/RX
+    if (i > 0)
+      lcd.print(row->is_tx ? "T " : "R ");
+    else
+      lcd.print("  ");
+    char buf[FT8_DISPLAY_COLS - 1];
+    memset(buf,0,sizeof(buf));
+    strncpy(buf, row->text, sizeof(buf) - 1);
+    buf[18] = '\0';
+    lcd.println(buf);
+  }
+
+  lcd.setTextColor(LCD_WHITE, LCD_BLACK);
+
+  // only fire once
+  if (any_timeout && !ft8_qso.popup_shown)
+  {
+    ft8_qso.popup_shown = true;
+    ft8_set_popup("Hold to abort");
+  }
+}
+
+static void ft8_show_swr(void)
+{
+  static const uint32_t PO_DECAY_RATE = 250ul;
+  static const float A = 0.141570128f;
+  static const float B = 5.64859373f;
+  volatile static uint32_t max_po = 0; 
+  volatile static uint32_t po_decay = 0;
+  if (!radio.tx_enable)
+  {
+    max_po = 0;
+    return;
+  }
+  const uint32_t adc_fwd_raw = (uint32_t)fwdADC.read();
+  const uint32_t adc_ref_raw = (uint32_t)refADC.read();
+  if (adc_fwd_raw==0xffffu || adc_ref_raw==0xffffu)
+  {
+    return;
+  }
+
+  // vswr
+  uint32_t vswr = 100u;
+  const float adcfwd = (float)(FILTER::ma1(adc_fwd_raw));
+  const float adcref = (float)(FILTER::ma2(adc_ref_raw));
+  const float vfwd = A * adcfwd + B;
+  const float vref = A * adcref + (adcref>2.0f?B:0.0f);
+  if (vfwd>vref)
+  {
+    vswr = (uint32_t)(100.0f * (vfwd + vref) / (vfwd - vref));
+    vswr = constrain(vswr,100u,999u);
+  }
+  // power out
+  // Vpp * Vpp / 400
+  const uint32_t now = millis();
+  const float fwd = A * (float)adc_fwd_raw + (adc_fwd_raw>2?B:0.0f);
+  const uint32_t po = (uint32_t)(((fwd * fwd) / 400.0f) * 10.0f + 0.5f);
+  if (po<max_po)
+  {
+    if (now>po_decay)
+    {
+      if (max_po>0) max_po--;
+      po_decay = now + PO_DECAY_RATE;
+    }
+  }
+  else
+  {
+    max_po = po;
+    po_decay = now + PO_DECAY_RATE;
+  }
+
+  // display SWR
+  char sz_swr[16] = "";
+  memset(sz_swr,0,sizeof(sz_swr));
+  ultoa(vswr,sz_swr,10);
+  sz_swr[3] = sz_swr[2];
+  sz_swr[2] = sz_swr[1];
+  sz_swr[1] = '.';
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+  lcd.setTextColor(LCD_WHITE);
+  lcd.setCursor(FT8_SWR_X,FT8_SWR_Y);
+  lcd.print(sz_swr);
+
+  // display power
+  char sz_po[16] = "";
+  memset(sz_po,0,sizeof(sz_po));
+  ultoa(max_po,sz_po,10);
+  if (max_po<10)
+  {
+    sz_po[2] = sz_po[0];
+    sz_po[1] = '.';
+    sz_po[0] = '0';
+  }
+  else if (max_po<100)
+  {
+    sz_po[2] = sz_po[1];
+    sz_po[1] = '.';
+  }
+  else
+  {
+    sz_po[3] = sz_po[2];
+    sz_po[2] = '.';
+  }
+  lcd.setCursor(FT8_PWR_X,FT8_PWR_Y);
+  lcd.print(sz_po);
+}
+
+static void ft8_show_calibrating(void)
+{
+  const uint32_t now = millis() % 1000000;
+  lcd.setTextFont(1);
+  lcd.setTextSize(2);
+  lcd.setTextColor(LCD_RED);
+  lcd.setCursor(0,30);
+  lcd.print("Calibrate:");
+  lcd.print(now);
+  lcd.println("ms");
+  lcd.setTextColor(LCD_WHITE);
+  lcd.print("Calibrate:");
+  lcd.print(now);
+  lcd.println("ms");
+  lcd.setTextColor(LCD_GREEN);
+  lcd.print("Calibrate:");
+  lcd.print(now);
+  lcd.println("ms");
+  lcd.setTextColor(LCD_BLUE);
+  lcd.print("Calibrate:");
+  lcd.print(now);
+  lcd.println("ms");
+  lcd.setTextColor(LCD_PURPLE);
+  lcd.print("Calibrate:");
+  lcd.print(now);
+  lcd.println("ms");
+  lcd.setTextColor(LCD_YELLOW);
+  lcd.print("Calibrate:");
+  lcd.print(now);
+  lcd.println("ms");
+}
+
+static void ft8_display(
+  const uint32_t slot_calibrate_ms,
+  const ft8_state_t ft8_state,
+  const uint32_t progress = 0,
+  const bool calibrating = false)
+{
+  display_clear();
+  ft8_show_pulse();
+  ft8_show_swr();
+  ft8_show_frequency();
+  ft8_show_progress(progress);
+  ft8_show_slot_status(slot_calibrate_ms, ft8_state);
+  ft8_show_tx_frequency();
+  if (calibrating)
+  {
+    ft8_show_calibrating();
+    display_refresh();
+    return;
+  }
+  if (ft8_qso.active || millis() < ft8_qso_display_until)
+    ft8_qso_display();
+  else
+    ft8_show_decoded(slot_calibrate_ms);
+  ft8_show_popup();
+  display_refresh();
+}
+
+//------------------------------------------------------------------------------
+// HISTORY RING BUFFER
+//------------------------------------------------------------------------------
+
+// Get the i-th entry in chronological order (0=oldest, count-1=newest)
+static const ft8_history_entry_t* ft8_history_get(uint32_t i)
+{
+  // if buffer not full yet
+  uint32_t idx = i;
+  if (ft8_history_count >= FT8_HISTORY_SIZE)
+    // oldest is at head
+    idx = (ft8_history_head + i) % FT8_HISTORY_SIZE;
+  return &ft8_history[idx];
+}
+
+// Append decoded messages from one slot into the rolling history
+static void ft8_history_add(
+  const char lines[][FTX_MAX_DISPLAY_LENGTH],
+  const uint32_t count,
+  const bool even_slot,
+  const uint8_t slot_num)
+{
+  if (count==0) return;
+  for (uint32_t i = 0; i < count; i++)
+  {
+    ft8_history_entry_t* entry = &ft8_history[ft8_history_head];
+    memcpy(entry->text, lines[i], FTX_MAX_DISPLAY_LENGTH);
+    entry->text[FTX_MAX_DISPLAY_LENGTH - 1] = '\0';
+    entry->received_in_even_slot = even_slot;
+    entry->slot_number_low = slot_num;
+    ft8_history_head = (ft8_history_head + 1) % FT8_HISTORY_SIZE;
+    if (ft8_history_count < FT8_HISTORY_SIZE) ft8_history_count++;
+  }
+  ft8_new_available = true;
+}
+
+// Snapshot live history into the frozen display buffer
+// Called once when user first moves the rotary encoder
+static void ft8_freeze_display(void)
+{
+  ft8_display_count = (ft8_history_count < FT8_HISTORY_SIZE)? ft8_history_count : FT8_HISTORY_SIZE;
+  for (uint32_t i = 0; i < ft8_display_count; i++)
+    ft8_display_buf[i] = *ft8_history_get(i);
+  // start at most recent
+  ft8_cursor = (int32_t)ft8_display_count - 1;
+  ft8_new_available = false;
+}
+
+//------------------------------------------------------------------------------
+// ROTARY ENCODER HANDLER
+// Call this every tick - reads radio.tune via rotary_mutex (same pattern as
+// the rest of the codebase)
+//------------------------------------------------------------------------------
+static void ft8_handle_rotary(void)
+{
+  // Read and consume rotary delta
+  if (!mutex_try_enter(&rotary_mutex,0ul))
+  {
+    // do not block but try again later
+    return;
+  }
+  const int32_t delta = radio.tune;
+  radio.tune = 0;
+  mutex_exit(&rotary_mutex);
+
+  if (delta == 0) return;
+
+  ft8_last_interaction = millis();
+  ft8_exit_pending_until = 0;
+  switch (ft8_ui_state)
+  {
+    case FT8_UI_AUTO:
+    {
+      // First rotary movement - freeze display and enter browse mode
+      if (ft8_history_count > 0)
+      {
+        ft8_freeze_display();
+        ft8_ui_state = FT8_UI_BROWSE;
+      }
+      break;
+    }
+    case FT8_UI_BROWSE:
+    {
+      // Scroll cursor through frozen display buffer
+      // CCW (delta < 0) moves toward older entries (lower index)
+      // CW  (delta > 0) moves toward newer entries (higher index)
+      ft8_cursor += delta;
+      if (ft8_cursor < 0) ft8_cursor = 0;
+      if (ft8_cursor >= (int32_t)ft8_display_count) ft8_cursor = (int32_t)ft8_display_count - 1;
+      break;
+    }
+    case FT8_UI_SELECTED:
+    {
+      break;
+    }
+  }
+}
+
+//------------------------------------------------------------------------------
+// DECODE CALLBACK
+// Called every N candidates during ft8_decode() so the UI stays responsive.
+//------------------------------------------------------------------------------
+static uint32_t ft8_cal_freeze = 0;
+static void ft8_ui_callback(void)
+{
+  // just update display and monitor rotary
+  // but only in browse mode
+  if (ft8_ui_state != FT8_UI_BROWSE) return;
+  ft8_handle_rotary();
+
+  // update display but only every 50ms
+  static uint32_t next_update = 0;
+  if (millis() > next_update)
+  {
+    next_update = millis() + 50ul;
+    ft8_display(ft8_cal_freeze, FT8_STATE_DECODING);
+  }
+}
+
+//------------------------------------------------------------------------------
+// ft8_cq_start()
+// Find a free frequency and arm CQ TX for the next slot.
+// Sets ft8_cq.active = true on success.
+//------------------------------------------------------------------------------
+static bool ft8_cq_start(const uint32_t slot_calibrate_ms)
+{
+  if (ft8_cq.active) return false;   // already running
+  if (ft8_qso.active) return false;   // QSO has priority
+
+  const float freq = ft8_find_free_freq();
+  if (freq <= 0.0f)
+  {
+    ft8_set_popup("No free freq","INFO:");
+    return false;
+  }
+
+  // TX in the very next slot (opposite parity to current)
+  const uint32_t now = millis();
+  const uint32_t slot_num = (now - slot_calibrate_ms) / FT8_SLOT_MS;
+  const bool this_even = (slot_num % 2) == 0;
+
+  ft8_cq.audio_freq = freq;
+  ft8_cq.even_slot = !this_even;
+  ft8_cq.attempts = 0;
+  ft8_cq.active = true;
+
+  LOG(LOG_INFO, "CQ start: %.0f Hz, next %s slot\n",
+    freq, !this_even ? "EVEN" : "ODD");
+  return true;
+}
+
+//------------------------------------------------------------------------------
+// ft8_cq_transmit()
+// Builds and sends one CQ message. Increments attempts counter.
+//------------------------------------------------------------------------------
+static bool ft8_cq_transmit(const uint32_t slot_calibrate_ms, const ft8_state_t ft8_state)
+{
+  char msg[FTX_MAX_MESSAGE_LENGTH];
+  snprintf(msg, sizeof(msg), "CQ %s %s", YOUR_CALL, YOUR_GRID);
+
+  uint8_t tones[FT8_NN];
+  memset(tones, 0, sizeof(tones));
+  if (!ft8_encode_message(msg, tones))
+  {
+    LOG(LOG_ERROR, "CQ encode failed\n");
+    return false;
+  }
+
+  const float tone0 = (float)tones[0] * FT8_TONE_SPACING;
+  set_frequency((uint32_t)((ft8_cq.audio_freq + tone0) * 100.0f));
+
+  ft8_enable_tx();
+  const bool ok = ft8_transmit_tones(tones, ft8_cq.audio_freq,
+    slot_calibrate_ms, ft8_state);
+  ft8_disable_tx();
+
+  ft8_cq.attempts++;
+  LOG(LOG_INFO, "CQ sent (attempt %d) at %.0f Hz\n",
+    ft8_cq.attempts, ft8_cq.audio_freq);
+  return ok;
+}
+
+//------------------------------------------------------------------------------
+// PARSE A CQ DISPLAY LINE
+//
+// Input format (from ft8_show_decoded snprintf):
+//   "+02.5 +0.12  998 ~  CQ VK3ABC QF22"
+//    snr   dt    freq     message
+//
+// Extracts:
+//   audio_freq  - the audio offset frequency in Hz (e.g. 998)
+//   their_call  - the calling station's callsign (e.g. "VK3ABC")
+//
+// Returns true if a valid CQ was parsed.
+//------------------------------------------------------------------------------
+static bool ft8_parse_cq(
+  const char* display_text,
+  float&      audio_freq_out,
+  char*       their_call_out, // buffer must be >= 12 chars
+  char*       their_grid_out) // buffer must be >= 8 chars, may be empty
+{
+  if (!display_text || !their_call_out) return false;
+
+  their_call_out[0] = '\0';
+  if (their_grid_out) their_grid_out[0] = '\0';
+
+  // Parse the three numeric fields and the message portion
+  float snr = 0.0f;
+  float dt = 0.0f;
+  float freq = 0.0f;
+  char msg[FTX_MAX_MESSAGE_LENGTH] = "";
+
+  // Format: "%+05.1f %+4.2f %4.0f ~  %s"
+  // Use %*c to skip the "~" and surrounding spaces
+  const int n = sscanf(display_text,"%f %f %f %34[^\n]",&snr, &dt, &freq, msg);
+  if (n < 4 || freq <= 0.0f) return false;
+
+  audio_freq_out = freq;
+
+  // msg should now be e.g. "CQ VK3ABC QF22" or "CQ DX VK3ABC QF22"
+  // Ensure it starts with "CQ" (case insensitive for safety)
+  if (strncmp(msg, "CQ", 2) != 0 && strncmp(msg, "cq", 2) != 0) return false;
+
+  // Tokenise: skip "CQ", optionally skip "DX"/"nnn"/"abcd" modifier
+  char tokens[4][16] = { "", "", "", "" };
+  const char* p = msg;
+  p = copy_token(tokens[0], sizeof(tokens[0]), p); // "CQ"
+  p = copy_token(tokens[1], sizeof(tokens[1]), p); // callsign OR modifier
+  p = copy_token(tokens[2], sizeof(tokens[2]), p); // grid OR callsign
+  p = copy_token(tokens[3], sizeof(tokens[3]), p); // grid (if modifier present)
+
+  // Determine which token is the callsign.
+  // A standard callsign contains at least one digit and is 3-8 chars.
+  // A grid square is exactly 4 chars: 2 letters + 2 digits.
+  // A modifier is "DX" or regional code or 3-digit number or 4 letters.
+  const char* callsign = NULL;
+  const char* grid = NULL;
+
+  if (tokens[2][0] != '\0')
+  {
+    // Check if tokens[1] looks like a modifier (DX, or 3 digits, or 4 letters)
+    bool t1_is_modifier = false;
+    if (equals(tokens[1], "DX"))
+    {
+      t1_is_modifier = true;
+    }
+    else
+    {
+      // 2-letter alpha = regional code (DX, NA, EU, SA, AS, AF, OC, plus future)
+      const int t1_len = (int)strlen(tokens[1]);
+      bool all_alpha = true;
+      bool all_digit = true;
+      for (int i = 0; tokens[1][i]; i++)
+      {
+        if (!is_letter(tokens[1][i])) all_alpha = false;
+        if (!is_digit(tokens[1][i])) all_digit = false;
+      }
+      if ((all_alpha && t1_len == 2) || // regional codes
+          (all_alpha && t1_len == 4) || // 4-letter named modifiers
+          (all_digit && t1_len == 3))   // 3-digit number
+        t1_is_modifier = true;
+    }
+    callsign = t1_is_modifier ? tokens[2] : tokens[1];
+    grid = t1_is_modifier ? tokens[3] : tokens[2];
+  }
+  else if (tokens[1][0] != '\0')
+  {
+    callsign = tokens[1];  // just "CQ VK3ABC" with no grid
+  }
+
+  if (!callsign || callsign[0] == '\0') return false;
+
+  strncpy(their_call_out, callsign, 11);
+  their_call_out[11] = '\0';
+
+  if (their_grid_out && grid && grid[0] != '\0')
+  {
+    strncpy(their_grid_out, grid, 7);
+    their_grid_out[7] = '\0';
+  }
+
+  return true;
+}
+
+static bool ft8_parse_direct_call(
+  const char* display_text,
+  float& audio_freq_out,
+  char* their_call_out,   // >= 12 chars
+  char* their_extra_out)  // >= 8 chars: grid OR report, may be empty
+{
+  if (!display_text || !their_call_out) return false;
+
+  their_call_out[0] = '\0';
+  if (their_extra_out) their_extra_out[0] = '\0';
+
+  float snr = 0.0f;
+  float dt = 0.0f;
+  float freq = 0.0f;
+  char msg[FTX_MAX_MESSAGE_LENGTH] = "";
+  if (sscanf(display_text, "%f %f %f %34[^\n]", &snr, &dt, &freq, msg) < 4)
+    return false;
+  if (freq <= 0.0f) return false;
+
+  audio_freq_out = freq;
+
+  // Message must be "OURCALL THEIRCALL EXTRA"
+  char tokens[3][16] = { "", "", "" };
+  const char* p = msg;
+  p = copy_token(tokens[0], sizeof(tokens[0]), p);  // should be YOUR_CALL
+  p = copy_token(tokens[1], sizeof(tokens[1]), p);  // their callsign
+  p = copy_token(tokens[2], sizeof(tokens[2]), p);  // grid or report
+
+  if (!equals(tokens[0], YOUR_CALL)) return false;
+  if (tokens[1][0] == '\0')          return false;
+
+  strncpy(their_call_out, tokens[1], 11);
+  their_call_out[11] = '\0';
+
+  if (their_extra_out && tokens[2][0] != '\0')
+  {
+    strncpy(their_extra_out, tokens[2], 7);
+    their_extra_out[7] = '\0';
+  }
+
+  return true;
+}
+
+//------------------------------------------------------------------------------
+// ENABLE TX  (simplified enable_ssb_tx - no update_display, no mic)
+//------------------------------------------------------------------------------
+static void ft8_enable_tx(void)
+{
+  digitalWrite(LED_BUILTIN, HIGH);
+
+  // Mute and disable receiver
+  mute();
+  delay(10);
+  bpf_port.output(I2C_PIN_RXN, TCA9534::Level::H);
+  delay(10);
+
+  // Set TX mode (no mic/DSP enable needed for FT8 - Si5351 drives QSE directly)
+  radio.tx_enable = true;
+  // Note: set_frequency() called per-tone in the TX loop
+
+  delay(10);
+
+  // Enable QSE and TX bias
+  lpf_port.output(I2C_PIN_TXENABLE, TCA9534::Level::H);
+  delay(50);
+  bpf_port.output(I2C_PIN_TXN, TCA9534::Level::L);
+  digitalWrite(PIN_TXBIAS, HIGH);
+}
+
+//------------------------------------------------------------------------------
+// DISABLE TX  - return to receive
+//------------------------------------------------------------------------------
+static void ft8_disable_tx(void)
+{
+  radio.tx_enable = false;
+  digitalWrite(PIN_TXBIAS, LOW);
+  bpf_port.output(I2C_PIN_TXN, TCA9534::Level::H);
+  bpf_port.output(I2C_PIN_RXN, TCA9534::Level::L);
+  lpf_port.output(I2C_PIN_TXENABLE, TCA9534::Level::L);
+  digitalWrite(LED_BUILTIN, LOW);
+
+  // Restore RX frequency (no ft8_offset)
+  set_frequency();
+  unmute();
+}
+
+//------------------------------------------------------------------------------
+// TRANSMIT FT8 TONES
+//
+// Transmits FT8_NN (79) tones, each FT8_SYMBOL_MS (160ms).
+// audio_base_hz: the audio frequency offset in Hz (e.g. 998)
+// tones[]:       tone indices 0..7 from ft8_encode_message()
+//
+// ft8_offset passed to set_frequency() = audio_base_hz + tone * 6.25 Hz
+// Since set_frequency takes uint32_t, we round to nearest Hz.
+// 6.25 Hz resolution: error < 0.5 Hz per tone, well within FT8 tolerance.
+//
+// Display is updated every 8 tones (~1.3s) so progress is visible.
+//------------------------------------------------------------------------------
+static const bool ft8_transmit_tones(
+  const uint8_t* tones,
+  const float audio_base_hz,
+  const uint32_t slot_calibrate_ms,
+  const ft8_state_t ft8_state)
+{
+  uint32_t first_press = 0;
+  absolute_time_t tone_process_next = make_timeout_time_ms(FT8_SYMBOL_MS);
+  for (int i = 0; i < FT8_NN; i++)
+  {
+    // Calculate SI5351 offset for this tone:
+    //  offset = (audio_base_hz + tones[i] * 6.25 Hz) * 100
+    //set_frequency takes integer Hz (* 100)
+    const float tone = (float)tones[i] * FT8_TONE_SPACING;
+    const uint32_t offset_100hz = (uint32_t)((audio_base_hz + tone) * 100.0f);
+    set_frequency(offset_100hz);
+
+    const uint32_t progress = UTIL::map(i+1, 0, FT8_NN, 0, 240);
+    ft8_display(slot_calibrate_ms, ft8_state, progress);
+
+    // if long press then exit
+    if (first_press == 0)
+    {
+      if (digitalRead(PIN_ENCBUT) == LOW)
+      {
+        first_press = millis();
+      }
+    }
+    else
+    {
+      if (digitalRead(PIN_ENCBUT) == HIGH)
+      {
+        if (millis() - first_press > FT8_BUTTON_LONG_PRESS)
+        {
+          return false;
+        }
+        first_press = 0;
+      }
+    }
+
+    busy_wait_until(tone_process_next);
+    tone_process_next = delayed_by_ms(tone_process_next,FT8_SYMBOL_MS);
+  }
+  return true;
+}
+
+//------------------------------------------------------------------------------
+// Find a stretch of frequency that's been quiet over the last several FT8
+// slots, wide enough to safely transmit a CQ without interfering with
+// existing signals. The function does this by looking at the waterfall
+// (the recent history of FFT magnitudes) and finding the longest run
+// of consecutive bins whose energy has stayed low.
+//------------------------------------------------------------------------------
+static const float ft8_find_free_freq(void)
+{
+  const ftx_waterfall_t* wf = &ft8mon.wf;
+  if (wf->num_blocks < 4) return 0.0f;
+
+  // Convert CQ TX range to FFT bin indices (one bin = 3.125 Hz)
+  const int fft_min = (int)(FT8_CQ_TX_MIN_HZ / 3.125f);     // 96
+  const int fft_max = (int)(FT8_CQ_TX_MAX_HZ / 3.125f);     // 800
+
+  // Convert to waterfall storage offsets
+  // Waterfall slot for fft_bin = (fft_bin / FREQ_OSR - FT8_MIN_BIN, fft_bin % FREQ_OSR)
+  const int scan_blocks = (wf->num_blocks < 4) ? wf->num_blocks : 4;
+  const int start_block = wf->num_blocks - scan_blocks;
+
+  // Peak magnitude per FFT bin across recent blocks (one entry per 3.125 Hz)
+  const int scan_len = fft_max - fft_min;
+  uint8_t peak[800] = { 0 };   // size to fit any range
+
+  for (int b = start_block; b < wf->num_blocks; b++)
+  {
+    const uint8_t* block = wf->mag + b * FT8_BLOCK_STRIDE;
+    // Use time_sub=0 only for the scan (one full row per freq_sub)
+    for (int fs = 0; fs < FT8_FREQ_OSR; fs++)
+    {
+      const uint8_t* row = block + fs * FT8_WF_NUM_BINS;
+      for (int fft_bin = fft_min; fft_bin < fft_max; fft_bin++)
+      {
+        const int wf_bin = (fft_bin / FT8_FREQ_OSR) - FT8_MIN_BIN;
+        const int wf_fs  = fft_bin % FT8_FREQ_OSR;
+        if (wf_fs != fs) continue;
+        if (wf_bin < 0) continue;
+        if (wf_bin >= FT8_WF_NUM_BINS) continue;
+        const uint8_t v = row[wf_bin];
+        const int idx = fft_bin - fft_min;
+        if (v > peak[idx]) peak[idx] = v;
+      }
+    }
+  }
+
+  // Slot-wide noise floor (25th percentile) — stable across noise variance
+  const int nf = ft8_estimate_noise_floor(wf);
+  // 15 dB above noise floor
+  const uint8_t QUIET = (uint8_t)(nf + 30);
+  const int NEEDED = 24;
+
+  int best_start = -1, best_len = 0;
+  int cur_start  =  0, cur_len  = 0;
+
+  for (int i = 0; i < scan_len; i++)
+  {
+    if (peak[i] < QUIET)
+    {
+      if (cur_len == 0) cur_start = i;
+      cur_len++;
+      if (cur_len > best_len) { best_len = cur_len; best_start = cur_start; }
+    }
+    else cur_len = 0;
+  }
+
+  if (best_len < NEEDED) return 0.0f;
+
+  // Centre of the quietest run, converted back to Hz
+  const int centre_fft_bin = fft_min + best_start + best_len / 2;
+  const float freq_hz = (float)centre_fft_bin * 3.125f;
+
+  LOG(LOG_INFO, "Free freq: %.0f Hz (run %d bins = %.0f Hz)\n",
+      freq_hz, best_len, best_len * 3.125f);
+
+  return freq_hz;
+}
+//------------------------------------------------------------------------------
+// ft8_qso_start()
+// Called when user confirms a CQ selection (button press in BROWSE mode).
+// Parses the CQ display line, builds all 6 QSO rows.
+// Sets ft8_qso.active = true on success.
+// Non-CQ selections leave ft8_qso.active = false (single TX, no QSO tracking).
+//------------------------------------------------------------------------------
+static void ft8_qso_start(void)
+{
+  memset(&ft8_qso, 0, sizeof(ft8_qso));
+
+  float snr_f = 0.0f, dt = 0.0f, freq = 0.0f;
+  char  msg[FTX_MAX_MESSAGE_LENGTH] = "";
+  if (sscanf(ft8_selected.text, "%f %f %f %34[^\n]",
+    &snr_f, &dt, &freq, msg) < 4) return;
+  if (freq <= 0.0f) return;
+
+  char their_call[12] = "";
+  char their_extra[8] = "";   // grid (from CQ) or report (from direct call)
+  bool is_cq  = false;
+  bool is_direct = false;
+
+  // Try CQ first, then direct call
+  if (ft8_parse_cq(ft8_selected.text, freq, their_call, their_extra))
+    is_cq = true;
+  else if (ft8_parse_direct_call(ft8_selected.text, freq, their_call, their_extra))
+    is_direct = true;
+  else
+    // neither — leave ft8_qso.active = false
+    return;
+
+  ft8_qso.audio_freq = freq;
+  strncpy(ft8_qso.their_call, their_call, sizeof(ft8_qso.their_call) - 1);
+
+  // Row 0: the heard message
+  strncpy(ft8_qso.rows[0].text, msg, FTX_MAX_DISPLAY_LENGTH - 1);
+  ft8_qso.rows[0].is_tx = false;
+  ft8_qso.rows[0].state = FT8_QSO_ROW_DONE;
+
+  if (is_direct)
+  {
+    // R1 (row 0 - heard): VK7IAN W1XYZ KO45 - already set above
+
+    // T2 (row 1): W1XYZ VK7IAN -07 (our signal report for them)
+    snprintf(ft8_qso.rows[1].text, FTX_MAX_DISPLAY_LENGTH,
+      "%s %s %s", their_call, YOUR_CALL, FT8_DEFAULT_REPORT);
+    ft8_qso.rows[1].is_tx = true;
+    ft8_qso.rows[1].state = FT8_QSO_ROW_CURRENT;
+
+    // R3 (row 2): VK7IAN W1XYZ R-09 or RR73
+    snprintf(ft8_qso.rows[2].text, FTX_MAX_DISPLAY_LENGTH,
+      "%s %s R???", YOUR_CALL, their_call);
+    ft8_qso.rows[2].is_tx = false;
+    ft8_qso.rows[2].state = FT8_QSO_ROW_PENDING;
+
+    // T4 (row 3): W1XYZ VK7IAN RRR (updated when R3 known)
+    snprintf(ft8_qso.rows[3].text, FTX_MAX_DISPLAY_LENGTH,
+      "%s %s RRR", their_call, YOUR_CALL);
+    ft8_qso.rows[3].is_tx = true;
+    ft8_qso.rows[3].state = FT8_QSO_ROW_PENDING;
+
+    // R5 (row 4): VK7IAN W1XYZ 73  (exit anyway on timeout)
+    snprintf(ft8_qso.rows[4].text, FTX_MAX_DISPLAY_LENGTH,
+      "%s %s 73", YOUR_CALL, their_call);
+    ft8_qso.rows[4].is_tx = false;
+    ft8_qso.rows[4].state = FT8_QSO_ROW_PENDING;
+
+    ft8_qso.num_rows = 5;   // rows 0-4
+  }
+  else
+  {
+    // ── Responding to CQ ──────────────────────────────────────────────
+    // Row 1 TX: THEIRCALL OURCALL OURGRID
+    snprintf(ft8_qso.rows[1].text, FTX_MAX_DISPLAY_LENGTH,
+      "%s %s %s", their_call, YOUR_CALL, YOUR_GRID);
+    ft8_qso.rows[1].is_tx = true;
+    ft8_qso.rows[1].state = FT8_QSO_ROW_CURRENT;
+
+    // Row 2 RX: they send us a signal report
+    snprintf(ft8_qso.rows[2].text, FTX_MAX_DISPLAY_LENGTH,
+      "%s %s ???", YOUR_CALL, their_call);
+    ft8_qso.rows[2].is_tx = false;
+    ft8_qso.rows[2].state = FT8_QSO_ROW_PENDING;
+
+    // Row 3 TX: THEIRCALL OURCALL R+report (filled when step 2 known)
+    snprintf(ft8_qso.rows[3].text, FTX_MAX_DISPLAY_LENGTH,
+      "%s %s R???", their_call, YOUR_CALL);
+    ft8_qso.rows[3].is_tx = true;
+    ft8_qso.rows[3].state = FT8_QSO_ROW_PENDING;
+
+    // Row 4 RX: their RR73
+    snprintf(ft8_qso.rows[4].text, FTX_MAX_DISPLAY_LENGTH,
+      "%s %s RR73", YOUR_CALL, their_call);
+    ft8_qso.rows[4].is_tx = false;
+    ft8_qso.rows[4].state = FT8_QSO_ROW_PENDING;
+
+    // Row 5 TX: our 73
+    snprintf(ft8_qso.rows[5].text, FTX_MAX_DISPLAY_LENGTH,
+      "%s %s 73", their_call, YOUR_CALL);
+    ft8_qso.rows[5].is_tx = true;
+    ft8_qso.rows[5].state = FT8_QSO_ROW_PENDING;
+
+    ft8_qso.num_rows = 6;
+  }
+
+  // test response encoding is valid
+  uint8_t test_tones[FT8_NN];
+  memset(test_tones, 0, sizeof(test_tones));
+  if (!ft8_encode_message(ft8_qso.rows[1].text, test_tones))
+  {
+    memset(&ft8_qso, 0, sizeof(ft8_qso));
+    ft8_set_popup("Cannot encode","ERROR:");
+    LOG(LOG_WARN, "Cannot encode response: %s\n", ft8_qso.rows[1].text);
+    return;
+  }
+
+  ft8_qso.current_step = 1;
+  ft8_qso.active = true;
+  ft8_qso.is_direct = is_direct;
+
+  LOG(LOG_INFO, "QSO start (%s): %s at %.0f Hz extra=[%s]\n",
+    is_cq ? "CQ-resp" : "direct",
+    their_call, freq, their_extra);
+}
+
+//------------------------------------------------------------------------------
+// ft8_qso_get_tx_message()
+// Returns message text for the current TX step, or NULL if not a TX step.
+//------------------------------------------------------------------------------
+static const char* ft8_qso_get_tx_message(void)
+{
+  if (!ft8_qso.active) return NULL;
+  const int s = ft8_qso.current_step;
+  if (s < 0 || s >= FT8_QSO_NUM_ROWS) return NULL;
+  if (!ft8_qso.rows[s].is_tx) return NULL;
+  return ft8_qso.rows[s].text;
+}
+
+//------------------------------------------------------------------------------
+// ft8_qso_after_tx()
+// Marks the current TX step DONE and advances to the next step.
+// Sets ft8_qso.active = false when all steps complete.
+//------------------------------------------------------------------------------
+static void ft8_qso_after_tx(void)
+{
+  if (!ft8_qso.active) return;
+  ft8_qso.rows[ft8_qso.current_step].state = FT8_QSO_ROW_DONE;
+  ft8_qso.current_step++;
+  if (ft8_qso.current_step >= ft8_qso.num_rows)
+  {
+    ft8_qso.active = false;
+    ft8_qso_display_until = millis() + 2000ul;
+    ft8_set_popup(ft8_qso.their_call,"COOL:");
+    LOG(LOG_INFO, "QSO complete\n");
+    return;
+  }
+  ft8_qso.rows[ft8_qso.current_step].state = FT8_QSO_ROW_CURRENT;
+}
+
+//------------------------------------------------------------------------------
+// ft8_qso_check_rx()
+// Called after each decode when QSO is active and current step is an RX step.
+// Scans decoded lines for their callsign + our callsign.
+// On match: updates the row text, advances to next step.
+// On miss:  increments attempts, updates row state (yellow→orange→red).
+//------------------------------------------------------------------------------
+static void ft8_qso_check_rx(
+  const char lines[][FTX_MAX_DISPLAY_LENGTH],
+  const uint32_t count)
+{
+  if (!ft8_qso.active) return;
+  const int step = ft8_qso.current_step;
+  if (step < 0 || step >= ft8_qso.num_rows) return;
+  ft8_qso_row_t* row = &ft8_qso.rows[step];
+  if (row->is_tx) return;
+  for (uint32_t i = 0; i < count; i++)
+  {
+    float snr = 0.0f, dt = 0.0f, freq = 0.0f;
+    char msg[FTX_MAX_MESSAGE_LENGTH] = "";
+    if (sscanf(lines[i], "%f %f %f %34[^\n]", &snr, &dt, &freq, msg) < 4) continue;
+
+    if (!strstr(msg, ft8_qso.their_call)) continue;
+    if (!strstr(msg, YOUR_CALL)) continue;
+
+    const char* last_sp = strrchr(msg, ' ');
+    const char* token = last_sp ? last_sp + 1 : msg;
+
+    // ── Step-specific validation ──────────────────────────────────────
+    if (ft8_qso.is_direct && step == 2)
+    {
+      // R3: accept R+report (any) or RR73/RRR/73
+      const bool is_r_report = (token[0] == 'R' &&
+        (token[1] == '-' || token[1] == '+'));
+      const bool is_end = (strcmp(token, "RR73") == 0 ||
+        strcmp(token, "RRR")  == 0 ||
+        strcmp(token, "73")   == 0);
+      if (!is_r_report && !is_end) continue;
+
+      // Update T4 message based on what we received
+      if (is_r_report)
+        snprintf(ft8_qso.rows[3].text, FTX_MAX_DISPLAY_LENGTH,
+          "%s %s RRR", ft8_qso.their_call, YOUR_CALL);
+      else
+        snprintf(ft8_qso.rows[3].text, FTX_MAX_DISPLAY_LENGTH,
+          "%s %s 73", ft8_qso.their_call, YOUR_CALL);
+    }
+    else if (!ft8_qso.is_direct && step == 4)
+    {
+      // CQ-resp R5: must be RR73/RRR/73
+      if (strcmp(token, "RR73") != 0 &&
+        strcmp(token, "RRR") != 0 &&
+        strcmp(token, "73") != 0) continue;
+    }
+    // other steps: any message with both callsigns accepted
+
+    // ── Good match ────────────────────────────────────────────────────
+    strncpy(row->text, msg, FTX_MAX_DISPLAY_LENGTH - 1);
+    row->state = FT8_QSO_ROW_DONE;
+
+    // CQ-response R3 (step 2): extract their report → build R+report for T4
+    if (!ft8_qso.is_direct && step == 2 && last_sp && last_sp[1] != '\0')
+    {
+      snprintf(ft8_qso.r_report, sizeof(ft8_qso.r_report),
+        "R%s", last_sp + 1);
+      snprintf(ft8_qso.rows[3].text, FTX_MAX_DISPLAY_LENGTH,
+        "%s %s %s",
+        ft8_qso.their_call, YOUR_CALL, ft8_qso.r_report);
+    }
+
+    // Advance
+    ft8_qso.current_step++;
+    if (ft8_qso.current_step < ft8_qso.num_rows)
+      ft8_qso.rows[ft8_qso.current_step].state = FT8_QSO_ROW_CURRENT;
+    else
+    {
+      ft8_qso.active = false;
+      ft8_selected.valid = false;
+      ft8_ui_state = FT8_UI_AUTO;
+      ft8_qso_display_until = millis() + 2000ul;
+      ft8_set_popup(ft8_qso.their_call,"COOL:");
+    }
+
+    LOG(LOG_INFO, "QSO step %d done: %s\n", step, msg);
+    return;
+  }
+
+  // ── No reply this slot ────────────────────────────────────────────────
+  row->attempts++;
+
+  // Final RX step: exit gracefully on timeout rather than retransmitting forever
+  const bool is_final_rx = (ft8_qso.current_step == ft8_qso.num_rows - 1);
+  if (is_final_rx && row->attempts >= FT8_QSO_MAX_RETRIES)
+  {
+    row->state = FT8_QSO_ROW_DONE;   // mark done anyway
+    ft8_qso.active = false;
+    ft8_selected.valid = false;
+    ft8_ui_state = FT8_UI_AUTO;    
+    ft8_qso_display_until = millis() + 2000ul;
+    ft8_set_popup(ft8_qso.their_call,"COOL:");
+    LOG(LOG_INFO, "QSO complete (R5 timeout - exiting)\n");
+    return;
+  }
+
+  if (row->attempts >= FT8_QSO_MAX_RETRIES) row->state = FT8_QSO_ROW_TIMEOUT;
+  else if (row->attempts >= 2) row->state = FT8_QSO_ROW_RETRY;
+  else row->state = FT8_QSO_ROW_WAITING;
+
+  LOG(LOG_INFO, "QSO step %d: no reply attempt %d\n", step, row->attempts);
+}
+//------------------------------------------------------------------------------
+// ft8_qso_abort()
+// Clean abort — returns to history browse, stays in FT8 mode.
+//------------------------------------------------------------------------------
+static void ft8_qso_abort(void)
+{
+  LOG(LOG_INFO, "QSO aborted at step %d\n", ft8_qso.current_step);
+  memset(&ft8_qso, 0, sizeof(ft8_qso));
+  memset(&ft8_cq, 0, sizeof(ft8_cq));
+  ft8_selected.valid = false;
+  ft8_ui_state = FT8_UI_AUTO;
+}
+
+static void ft8_init(void)
+{
+  memset(ft8_history, 0, sizeof(ft8_history));
+  memset(ft8_display_buf, 0, sizeof(ft8_display_buf));
+  memset(&ft8_qso, 0, sizeof(ft8_qso));
+  memset(&ft8_cq, 0, sizeof(ft8_cq));
+  ft8_history_count = 0;
+  ft8_history_head = 0;
+  ft8_display_count = 0;
+  ft8_selected.valid = false;
+  ft8_ui_state = FT8_UI_AUTO;
+  ft8_new_available = false;
+  ft8_exit_pending_until = 0;
+}
+
+//------------------------------------------------------------------------------
+// MAIN FT8 FUNCTION
+// Called from loop1() on core 1 while radio.mode == MODE_FT8
+// Returns false to exit FT8 mode
+//------------------------------------------------------------------------------
+static const bool do_ft8(void)
+{
+  // Persistent state across calls
+  static uint32_t slot_calibrate_ms = 0;
+  static uint32_t ft8_button_down_time = 0;
+  static uint32_t progress = 0;
+  static ft8_state_t ft8_state = FT8_STATE_WAITING;
+  static bool ft8_hash_init = false;
+
+  //--------------------------------------------------------------------------
+  // One-time calibration on first entry
+  // User presses button at a known 15-second slot boundary
+  //--------------------------------------------------------------------------
+  if (slot_calibrate_ms == 0)
+  {
+    delay(50);
+    // wait for release
+    while (digitalRead(PIN_ENCBUT) == LOW)
+      delay(50);
+
+    uint32_t cal_progress = 0;
+    uint32_t disp_update  = 0;
+    const uint32_t cal_start = millis();
+    while (digitalRead(PIN_ENCBUT) == HIGH)
+    {
+      const uint32_t now = millis();
+      // give them minute!
+      if (now - cal_start > 60000ul) return false;
+      if (now > disp_update)
+      {
+        disp_update = now + 50ul;
+        ft8_display(0, ft8_state, cal_progress++, true);
+        if (cal_progress > 240) cal_progress = 0;
+      }
+    }
+    slot_calibrate_ms = millis();
+    delay(50);
+    // wait for release
+    while (digitalRead(PIN_ENCBUT) == LOW)
+      delay(50);
+  }
+
+  //--------------------------------------------------------------------------
+  // One-time hash table init
+  //--------------------------------------------------------------------------
+  if (!ft8_hash_init)
+  {
+    ft8_init();
+    ft8_hashtable_init();
+    ft8_hash_init = true;
+  }
+
+  //--------------------------------------------------------------------------
+  // Slot timing
+  //--------------------------------------------------------------------------
+  const uint32_t now = millis();
+  const uint32_t slot_ms = (now - slot_calibrate_ms) % FT8_SLOT_MS;
+  const uint32_t slot_num = (now - slot_calibrate_ms) / FT8_SLOT_MS;
+  const bool even_slot = (slot_num % 2) == 0;
+
+  //--------------------------------------------------------------------------
+  // Handle rotary encoder input
+  //--------------------------------------------------------------------------
+  ft8_handle_rotary();
+
+  //--------------------------------------------------------------------------
+  // Auto-return to live view after inactivity in browse mode
+  //--------------------------------------------------------------------------
+  // FT8_UI_SELECTED persists until TX fires or user presses button to cancel
+  if (ft8_ui_state == FT8_UI_BROWSE)
+  {
+    if ((now - ft8_last_interaction) > FT8_BROWSE_TIMEOUT_MS)
+    {
+      ft8_ui_state = FT8_UI_AUTO;
+      ft8_cursor = 0;
+    }
+  }
+  //--------------------------------------------------------------------------
+  // FT8 receive / decode state machine
+  //--------------------------------------------------------------------------
+  switch (ft8_state)
+  {
+    case FT8_STATE_WAITING:
+    {
+      if (slot_ms < FT8_START_THRESHOLD)
+      {
+        bool should_tx = false;
+        if (ft8_qso.active)
+        {
+          const int step = ft8_qso.current_step;
+          if (step < 0 || step >= ft8_qso.num_rows)
+          {
+            // invariant broken - abort cleanly
+            ft8_set_popup("QSO error", "ERROR:");
+            ft8_qso_abort();
+            ft8_state = FT8_STATE_WAITING;
+            break;
+          }          
+          const ft8_qso_row_t* row = &ft8_qso.rows[step];
+          if (row->is_tx)
+          {
+            // TX step — fire in correct parity slot
+            should_tx = (ft8_selected.respond_in_even_slot == even_slot);
+          }
+          else
+          {
+            // RX step — retransmit previous TX in our TX slots
+            // until they reply (DONE) or user aborts
+            // TIMEOUT is visual only — keep retransmitting until abort
+            should_tx = (row->state != FT8_QSO_ROW_DONE) &&
+              (ft8_selected.respond_in_even_slot == even_slot);
+          }
+        }
+        else if (ft8_cq.active)
+        {
+          should_tx = (ft8_cq.even_slot == even_slot);
+        }
+        else
+        {
+          should_tx = ft8_selected.valid &&
+            (ft8_selected.respond_in_even_slot == even_slot);
+        }
+        if (should_tx)
+        {
+          ft8_state = FT8_STATE_TRANSMITTING;
+          ft8_button_down_time = 0;
+          progress  = 0;
+        }
+        else
+        {
+          progress = 0;
+          ft8_monitor_init(&ft8mon);
+          ft8_state = FT8_STATE_RECEIVING;
+        }
+      }
+      break;
+    }
+    case FT8_STATE_RECEIVING:
+    {
+      static const uint32_t buff_size = FT8_FFT_SIZE / 2;  // 1250
+      static uint32_t last_offset = UINT32_MAX;
+
+      // Reset last_offset when re-entering receiving state
+      if (slot_ms < FT8_START_THRESHOLD + 50u) last_offset = UINT32_MAX;
+
+      const uint32_t sample_p = ft8_sample_p;
+      uint32_t offset = 0;
+      bool valid = true;
+
+      if (sample_p < 400u)
+        // second half complete
+        offset = buff_size;
+      else if (sample_p >= buff_size && sample_p < (buff_size + 400u))
+        // first half complete
+        offset = 0;
+      else
+        // dead zone
+        valid = false;
+
+      if (valid && offset != last_offset)
+      {
+        last_offset = offset;
+        ft8_monitor_process(&ft8mon, (const float*)ft8_data + offset);
+        progress++;
+      }
+
+      if (slot_ms >= FT8_RECEIVE_MS)
+        ft8_state = FT8_STATE_DECODING;
+
+      break;
+    }
+    case FT8_STATE_DECODING:
+    {
+      const uint32_t decode_start = millis();
+      progress = 0;
+      ft8_cal_freeze = slot_calibrate_ms;
+      static char ft8_lines[FT8_MAX_DECODED][FTX_MAX_DISPLAY_LENGTH] = { 0 };
+      memset(ft8_lines, 0, sizeof(ft8_lines));
+      const uint32_t n = ft8_decode(&ft8mon, ft8_lines, ft8_ui_callback);
+      ft8_history_add(ft8_lines, n, even_slot, (uint8_t)slot_num);
+
+      if (ft8_qso.active) ft8_qso_check_rx(ft8_lines, n);
+
+      if (ft8_ui_state == FT8_UI_AUTO) ft8_new_available = false;
+      ft8_monitor_reset(&ft8mon);
+
+      // compensate button timer for the blocking decode period
+      if (ft8_button_down_time != 0 && ft8_button_down_time < decode_start)
+      {
+        const uint32_t decode_duration = millis() - decode_start;
+        ft8_button_down_time += decode_duration;
+      }
+
+      ft8_state = FT8_STATE_WAITING;
+      break;
+    }
+    case FT8_STATE_TRANSMITTING:
+    {
+      if (ft8_qso.active)
+      {
+        // Determine which message to send:
+        // If current step is RX (retransmit case), send previous TX step message
+        const int tx_step = ft8_qso.rows[ft8_qso.current_step].is_tx?
+          ft8_qso.current_step : ft8_qso.current_step - 1;
+        const char* msg = ft8_qso.rows[tx_step].text;
+        uint8_t tones[FT8_NN];
+        memset(tones, 0, sizeof(tones));
+        if (ft8_encode_message(msg, tones))
+        {
+          const float tone0 = (float)tones[0] * FT8_TONE_SPACING;
+          set_frequency((uint32_t)((ft8_qso.audio_freq + tone0) * 100.0f));
+          ft8_enable_tx();
+          const bool ok = ft8_transmit_tones(tones, ft8_qso.audio_freq, slot_calibrate_ms, ft8_state);
+          ft8_disable_tx();
+          if (!ok)
+          {
+            ft8_qso_abort();
+            ft8_state = FT8_STATE_WAITING;
+            break;
+          }
+          if (ft8_qso.rows[ft8_qso.current_step].is_tx)
+          {
+            // First transmission of this TX step — advance to RX step
+            ft8_qso_after_tx();
+          }
+          else
+          {
+            // Retransmit — count as an attempt on the RX step
+            // (attempt already incremented by ft8_qso_check_rx on missed slot)
+            LOG(LOG_INFO, "QSO retransmit step %d, attempt %d\n",
+              tx_step, ft8_qso.rows[ft8_qso.current_step].attempts);
+          }
+        }
+        else
+        {
+          LOG(LOG_ERROR, "QSO TX encode failed: %s\n", msg);
+          ft8_set_popup("Encode failed","ERROR:");
+          ft8_qso_abort();
+        }
+        if (!ft8_qso.active)
+        {
+          ft8_selected.valid = false;
+          ft8_ui_state = FT8_UI_AUTO;
+        }
+      }
+      else if (ft8_cq.active)
+      {
+        if (!ft8_cq_transmit(slot_calibrate_ms, ft8_state))
+          // long-press abort or encode err
+          ft8_cq.active = false;
+      }
+      else
+      {
+        // should not happen
+        ft8_selected.valid = false;
+        ft8_ui_state = FT8_UI_AUTO;
+      }
+      ft8_state = FT8_STATE_WAITING;
+      break;
+    }
+  }
+
+  //--------------------------------------------------------------------------
+  // Handle button press (exit mode or browse/select)
+  //--------------------------------------------------------------------------
+  // Non-blocking button press handling
+  // Records press start time; processes the action on release.
+  // The receive state machine continues to run between samples.
+  //--------------------------------------------------------------------------
+  if (ft8_state != FT8_STATE_TRANSMITTING)
+  {
+    const bool button_pressed = (digitalRead(PIN_ENCBUT) == LOW);
+    if (ft8_button_down_time == 0 && button_pressed)
+    {
+      // press starting — record time and continue
+      ft8_button_down_time = millis();
+    }
+    else if (ft8_button_down_time != 0 && !button_pressed)
+    {
+      // released — measure and act
+      const uint32_t held_ms = millis() - ft8_button_down_time;
+      // reset BEFORE any return false
+      ft8_button_down_time = 0;
+      if (held_ms < 50)
+      {
+        // debounce — ignore
+      }
+      else if (held_ms >= FT8_BUTTON_LONG_PRESS)
+      {
+        // long press — abort current activity (priority: QSO → CQ → exit)
+        progress = 0;
+        if (ft8_qso.active)
+        {
+          ft8_exit_pending_until = 0;
+          ft8_qso_abort();
+          ft8_state = FT8_STATE_WAITING;
+        }
+        else if (ft8_cq.active)
+        {
+          ft8_exit_pending_until = 0;
+          ft8_cq.active = false;
+          ft8_state = FT8_STATE_WAITING;
+          LOG(LOG_INFO, "CQ stopped\n");
+        }
+        else if (ft8_selected.valid)
+        {
+          // cancel pending single TX
+          ft8_exit_pending_until = 0;
+          ft8_selected.valid = false;
+          ft8_ui_state = FT8_UI_AUTO;
+          ft8_state = FT8_STATE_WAITING;
+        }
+        else
+        {
+          // Exit FT8 requires confirmation - long press twice within 5s
+          const uint32_t now_ms = millis();
+          if (ft8_exit_pending_until != 0 && now_ms < ft8_exit_pending_until)
+          {
+              // Confirmed
+              ft8_init();
+              ft8_state = FT8_STATE_WAITING;
+              return false;
+          }
+          // First long press - request confirmation
+          ft8_exit_pending_until = now_ms + 5000ul;
+          ft8_set_popup("Hold to exit","CONFIRM EXIT:");
+        }
+      }
+      else
+      {
+        // short press — action depends on UI state
+        ft8_last_interaction = millis();
+        switch (ft8_ui_state)
+        {
+          case FT8_UI_AUTO:
+          {
+            ft8_cq_start(slot_calibrate_ms);
+            break;
+          }
+          case FT8_UI_BROWSE:
+          {
+            // don't replace an active QSO
+            if (ft8_qso.active) break;
+            if (ft8_display_count > 0 &&
+              ft8_cursor >= 0 &&
+              ft8_cursor < (int32_t)ft8_display_count)
+            {
+              ft8_cq.active = false;
+              const ft8_history_entry_t* e = &ft8_display_buf[ft8_cursor];
+              memcpy(ft8_selected.text, e->text, FTX_MAX_DISPLAY_LENGTH);
+              ft8_selected.respond_in_even_slot = !e->received_in_even_slot;
+              ft8_selected.slot_number_low = e->slot_number_low;
+              ft8_selected.valid = false;
+              ft8_qso_start();
+              if (ft8_qso.active)
+              {
+                // only valid if QSO actually started
+                ft8_selected.valid = true;       
+                ft8_ui_state = FT8_UI_SELECTED;
+              }
+              else
+              {
+                ft8_set_popup("Not CQ/Your Call","INFO");
+              }
+            }
+            break;
+          }
+          case FT8_UI_SELECTED:
+          {
+            break;
+          }
+        }
+      }
+    }
+    // Otherwise: button still up (do nothing) or still down (keep tracking)
+  }
+  //--------------------------------------------------------------------------
+  // Update display every 50ms
+  //--------------------------------------------------------------------------
+  static uint32_t next_update = 0;
+  if (millis() > next_update)
+  {
+    next_update = millis() + 50ul;
+    const uint32_t prog = UTIL::map(progress, 0, 80, 0, 240);
+    ft8_display(slot_calibrate_ms, ft8_state, prog);
+  }
+
+  return true;  // stay in FT8 mode
+}
+
+/*
+ * general UI processing
+ */
 void loop1(void)
 {
   // run UI on core 1
+  if (radio.mode == MODE_FT8)
+  {
+    // keep FT8 completely separate
+    if (do_ft8())
+    {
+      return;
+    }
+    radio.mode_auto = true;
+    radio.mode = get_mode_auto();
+    set_frequency();
+  }
   static uint32_t old_frequency = radio.frequency;
   static uint32_t old_band = radio.band;
   static uint32_t old_sidetone = radio.sidetone;
@@ -2454,6 +4265,7 @@ void loop1(void)
         case OPTION_MODE_CWU:        radio.mode = MODE_CWU; radio.mode_auto = false; break;
         case OPTION_MODE_DGL:        radio.mode = MODE_DGL; radio.mode_auto = false; break;
         case OPTION_MODE_DGU:        radio.mode = MODE_DGU; radio.mode_auto = false; break;
+        case OPTION_MODE_FT8:        radio.mode = MODE_FT8; radio.mode_auto = false; break;
         case OPTION_MODE_AM:         radio.mode = MODE_AM;  radio.mode_auto = false; break;
         case OPTION_MODE_AUTO:       radio.mode_auto = true;                         break;
         case OPTION_STEP_10:         radio.step = 10U;                               break;
@@ -2821,7 +4633,7 @@ void loop1(void)
   }
 
   // check for PTT
-  const bool digital = (radio.mode==MODE_DGL || radio.mode==MODE_DGU);
+  const bool digital = (radio.mode==MODE_DGL || radio.mode==MODE_DGU || radio.mode==MODE_FT8);
   const bool b_PTT = (!digital && radio.tx_safe && digitalRead(PIN_PTT)==LOW);
   const bool b_PADA = (!digital && radio.tx_safe && digitalRead(PIN_PADA)==LOW);
   const bool b_PADB = (!digital && radio.tx_safe && digitalRead(PIN_PADB)==LOW);

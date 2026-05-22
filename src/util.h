@@ -18,6 +18,8 @@
 #define LCD_YELLOW _rev(TFT_YELLOW)
 #define LCD_PINK   _rev(TFT_PINK)
 #define LCD_PURPLE _rev(TFT_PURPLE)
+#define LCD_CYAN   _rev(TFT_CYAN)
+#define LCD_DARKGREY _rev(TFT_DARKGREY)
 #define LCD_MODE   _rev(0xf000)
 
 namespace UTIL
