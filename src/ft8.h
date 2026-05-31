@@ -356,7 +356,7 @@ static void ft8_hashtable_add(const char* callsign, uint32_t hash)
   callsign_hashtable[idx].hash = hash;
 }
 
-static bool ft8_hashtable_lookup(ftx_callsign_hash_type_t hash_type, uint32_t hash, char* callsign)
+static const bool ft8_hashtable_lookup(ftx_callsign_hash_type_t hash_type, uint32_t hash, char* callsign)
 {
   uint8_t  shift = (hash_type == FTX_CALLSIGN_HASH_10_BITS) ? 12
     : (hash_type == FTX_CALLSIGN_HASH_12_BITS) ? 10 : 0;
@@ -427,7 +427,7 @@ static const uint8_t kFTX_LDPC_Nm[FTX_LDPC_M][7] =
   { 17, 42, 75, 129, 170, 172, 0 }
 };
 
-const uint8_t kFTX_LDPC_Mn[FTX_LDPC_N][3] =
+static const uint8_t kFTX_LDPC_Mn[FTX_LDPC_N][3] =
 {
   { 16, 45, 73 }, { 25, 51, 62 }, { 33, 58, 78 }, { 1, 44, 45 },
   { 2, 7, 61 }, { 3, 6, 54 }, { 4, 35, 48 }, { 5, 13, 21 },
@@ -475,7 +475,7 @@ const uint8_t kFTX_LDPC_Mn[FTX_LDPC_N][3] =
   { 20, 44, 48 }, { 42, 49, 57 }
 };
 
-const uint8_t kFTX_LDPC_Num_rows[FTX_LDPC_M] =
+static const uint8_t kFTX_LDPC_Num_rows[FTX_LDPC_M] =
 {
   7, 6, 6, 6, 7, 6, 7, 6, 6, 7, 6, 6, 7, 7, 6, 6,
   6, 7, 6, 7, 6, 7, 6, 6, 6, 7, 6, 6, 6, 7, 6, 6,
@@ -490,7 +490,7 @@ const uint8_t kFTX_LDPC_Num_rows[FTX_LDPC_M] =
 //------------------------------------------------------------------------------
 #define FT8_TOPBIT (1u << (FT8_CRC_WIDTH - 1))
 
-static uint16_t ftx_compute_crc(const uint8_t message[], int num_bits)
+static const uint16_t ftx_compute_crc(const uint8_t message[], int num_bits)
 {
   uint16_t remainder = 0;
   int idx_byte = 0;
@@ -509,12 +509,12 @@ static uint16_t ftx_compute_crc(const uint8_t message[], int num_bits)
   return remainder & ((FT8_TOPBIT << 1) - 1u);
 }
 
-static uint16_t ftx_extract_crc(const uint8_t a91[])
+static const uint16_t ftx_extract_crc(const uint8_t a91[])
 {
   return ((a91[9] & 0x07) << 11) | (a91[10] << 3) | (a91[11] >> 5);
 }
 
-void ftx_add_crc(const uint8_t payload[], uint8_t a91[])
+static void ftx_add_crc(const uint8_t payload[], uint8_t a91[])
 {
   for (int i = 0; i < 10; i++) a91[i] = payload[i];
   a91[9] &= 0xF8u; a91[10] = 0;
@@ -527,7 +527,7 @@ void ftx_add_crc(const uint8_t payload[], uint8_t a91[])
 //------------------------------------------------------------------------------
 // LDPC  (static arrays avoid ~115 KB stack)
 //------------------------------------------------------------------------------
-static float fast_tanh(float x)
+static const float fast_tanh(float x)
 {
   if (x < -4.97f) return -1.0f;
   if (x > 4.97f) return  1.0f;
@@ -535,13 +535,13 @@ static float fast_tanh(float x)
   return x * (945.0f + x2 * (105.0f + x2)) / (945.0f + x2 * (420.0f + x2 * 15.0f));
 }
 
-static float fast_atanh(float x)
+static const float fast_atanh(float x)
 {
   const float x2 = x * x;
   return x * (945.0f + x2 * (-735.0f + x2 * 64.0f)) / (945.0f + x2 * (-1050.0f + x2 * 225.0f));
 }
 
-static int ldpc_check(uint8_t codeword[])
+static const int ldpc_check(uint8_t codeword[])
 {
   int errors = 0;
   for (int m = 0; m < FTX_LDPC_M; ++m)
@@ -616,7 +616,7 @@ static void fmtmsg(char* o, const char* i) { char c, l = 0; while ((c = *i)) { i
 static char* append_string(char* s, const char* t) { while (*t != '\0') { *s = *t; s++; t++; } *s = '\0'; return s; }
 static const char* copy_token(char* t, int n, const char* s) { while (*s != ' ' && *s != '\0') { if (n > 1) { *t = *s; t++; n--; }s++; } while (n > 0) { *t = '\0'; t++; n--; } while (*s == ' ')s++; return s; }
 
-static int dd_to_int(const char* str, int length)
+static const int dd_to_int(const char* str, int length)
 {
   int result = 0; bool neg; int i;
   if (str[0] == '-') { neg = true; i = 1; }
@@ -640,7 +640,7 @@ static char charn(int c, ft8_char_table_e t)
   if (t == FT8_CHAR_TABLE_ALPHANUM_SPACE_SLASH && c == 0)return '/';
   return '_';
 }
-static int nchar(char c, ft8_char_table_e t)
+static const int nchar(char c, ft8_char_table_e t)
 {
   int n = 0;
   if (t != FT8_CHAR_TABLE_ALPHANUM && t != FT8_CHAR_TABLE_NUMERIC) { if (c == ' ')return n; n += 1; }
@@ -660,7 +660,7 @@ static int nchar(char c, ft8_char_table_e t)
 
 static void add_brackets(char* r, const char* o, int n) { r[0] = '<'; memcpy(r + 1, o, n); r[n + 1] = '>'; r[n + 2] = '\0'; }
 
-static bool save_callsign(const char* cs, uint32_t* n22o, uint16_t* n12o, uint16_t* n10o)
+static const bool save_callsign(const char* cs, uint32_t* n22o, uint16_t* n12o, uint16_t* n10o)
 {
   uint64_t n58 = 0; int i = 0;
   while (cs[i] != '\0' && i < 11) { int j = nchar(cs[i], FT8_CHAR_TABLE_ALPHANUM_SPACE_SLASH); if (j < 0)return false; n58 = (38 * n58) + j; i++; }
@@ -673,21 +673,21 @@ static bool save_callsign(const char* cs, uint32_t* n22o, uint16_t* n12o, uint16
   return true;
 }
 
-static bool lookup_callsign(ftx_callsign_hash_type_t ht, uint32_t hash, char* cs)
+static const bool lookup_callsign(ftx_callsign_hash_type_t ht, uint32_t hash, char* cs)
 {
   char c11[12];
   const bool found = ft8_hashtable_lookup(ht, hash, c11);
   if (!found) strcpy(cs, "<...>"); else add_brackets(cs, c11, (int)strlen(c11)); return found;
 }
 
-static int parse_cq_modifier(const char* s)
+static const int parse_cq_modifier(const char* s)
 {
   int nnum = 0, nlet = 0, m = 0;
   for (int i = 3; i < 8; ++i) { if (!s[i] || is_space(s[i]))break; else if (is_digit(s[i]))++nnum; else if (is_letter(s[i])) { ++nlet; m = 27 * m + (s[i] - 'A' + 1); } else return -1; }
   if (nnum == 3 && nlet == 0)return atoi(s + 3); if (nnum == 0 && nlet <= 4)return 1000 + m; return -1;
 }
 
-static int32_t pack_basecall(const char* cs, int len)
+static const int32_t pack_basecall(const char* cs, int len)
 {
   if (len > 2)
   {
@@ -702,7 +702,7 @@ static int32_t pack_basecall(const char* cs, int len)
   return -1;
 }
 
-static int32_t pack28(const char* cs, uint8_t* ip)
+static const int32_t pack28(const char* cs, uint8_t* ip)
 {
   *ip = 0;
   if (equals(cs, "DE"))return 0; if (equals(cs, "QRZ"))return 1; if (equals(cs, "CQ"))return 2;
@@ -716,7 +716,7 @@ static int32_t pack28(const char* cs, uint8_t* ip)
   return -1;
 }
 
-static int unpack28(uint32_t n28, uint8_t ip, uint8_t i3, char* r)
+static const int unpack28(uint32_t n28, uint8_t ip, uint8_t i3, char* r)
 {
   if (n28 < NTOKENS)
   {

@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 5.0.240
+ * MBPTRX Version 5.1.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -68,6 +68,7 @@
  *  4.3.240 TX guard on startup
  *  4.4.240 minor update to spectrum processing
  *  5.0.240 FT8 built in
+ *  5.1.240 FT8 refactor button press
  */
 
 //#define DEBUGGING_SKIP
@@ -103,7 +104,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V5.0."
+#define VERSION_STRING "  V5.1."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -2508,6 +2509,10 @@ static uint32_t ft8_exit_pending_until = 0;
 // CQ state
 static ft8_cq_t ft8_cq = { 0 };
 
+// record button during decode callback
+static ft8_btn_t ft8_button_deferred = FT8_BTN_IDLE;
+static uint32_t ft8_button_down_time = 0;
+
 //------------------------------------------------------------------------------
 // DISPLAY FUNCTIONS
 //------------------------------------------------------------------------------
@@ -3112,6 +3117,27 @@ static void ft8_handle_rotary(void)
   }
 }
 
+static const ft8_btn_t ft8_button_check(void)
+{
+  const bool pressed = (digitalRead(PIN_ENCBUT) == LOW);
+
+  if (ft8_button_down_time == 0)
+  {
+    if (pressed) ft8_button_down_time = millis();
+    return FT8_BTN_IDLE;
+  }
+
+  if (pressed) return FT8_BTN_IDLE; // still down
+
+  // Released — classify and consume
+  const uint32_t held = millis() - ft8_button_down_time;
+  ft8_button_down_time = 0;
+
+  if (held < 50) return FT8_BTN_IDLE;   // debounce
+  if (held >= FT8_BUTTON_LONG_PRESS) return FT8_BTN_LONG;
+  return FT8_BTN_SHORT;
+}
+
 //------------------------------------------------------------------------------
 // DECODE CALLBACK
 // Called every N candidates during ft8_decode() so the UI stays responsive.
@@ -3119,12 +3145,16 @@ static void ft8_handle_rotary(void)
 static uint32_t ft8_cal_freeze = 0;
 static void ft8_ui_callback(void)
 {
-  // just update display and monitor rotary
+  // update display,
+  // monitor rotary,
+  // monitor button,
   // but only in browse mode
   if (ft8_ui_state != FT8_UI_BROWSE) return;
   ft8_handle_rotary();
 
-  // update display but only every 50ms
+  const ft8_btn_t btn = ft8_button_check();
+  if (btn != FT8_BTN_IDLE) ft8_button_deferred = btn;
+
   static uint32_t next_update = 0;
   if (millis() > next_update)
   {
@@ -3403,13 +3433,12 @@ static const bool ft8_transmit_tones(
   const uint32_t slot_calibrate_ms,
   const ft8_state_t ft8_state)
 {
-  uint32_t first_press = 0;
   absolute_time_t tone_process_next = make_timeout_time_ms(FT8_SYMBOL_MS);
   for (int i = 0; i < FT8_NN; i++)
   {
     // Calculate SI5351 offset for this tone:
     //  offset = (audio_base_hz + tones[i] * 6.25 Hz) * 100
-    //set_frequency takes integer Hz (* 100)
+    // set_frequency takes integer Hz (* 100)
     const float tone = (float)tones[i] * FT8_TONE_SPACING;
     const uint32_t offset_100hz = (uint32_t)((audio_base_hz + tone) * 100.0f);
     set_frequency(offset_100hz);
@@ -3418,24 +3447,7 @@ static const bool ft8_transmit_tones(
     ft8_display(slot_calibrate_ms, ft8_state, progress);
 
     // if long press then exit
-    if (first_press == 0)
-    {
-      if (digitalRead(PIN_ENCBUT) == LOW)
-      {
-        first_press = millis();
-      }
-    }
-    else
-    {
-      if (digitalRead(PIN_ENCBUT) == HIGH)
-      {
-        if (millis() - first_press > FT8_BUTTON_LONG_PRESS)
-        {
-          return false;
-        }
-        first_press = 0;
-      }
-    }
+    if (ft8_button_check() == FT8_BTN_LONG) return false;
 
     busy_wait_until(tone_process_next);
     tone_process_next = delayed_by_ms(tone_process_next,FT8_SYMBOL_MS);
@@ -3815,6 +3827,8 @@ static void ft8_init(void)
   ft8_ui_state = FT8_UI_AUTO;
   ft8_new_available = false;
   ft8_exit_pending_until = 0;
+  ft8_button_deferred = FT8_BTN_IDLE;
+  ft8_button_down_time = 0;
 }
 
 //------------------------------------------------------------------------------
@@ -3826,7 +3840,6 @@ static const bool do_ft8(void)
 {
   // Persistent state across calls
   static uint32_t slot_calibrate_ms = 0;
-  static uint32_t ft8_button_down_time = 0;
   static uint32_t progress = 0;
   static ft8_state_t ft8_state = FT8_STATE_WAITING;
   static bool ft8_hash_init = false;
@@ -3947,7 +3960,7 @@ static const bool do_ft8(void)
         if (should_tx)
         {
           ft8_state = FT8_STATE_TRANSMITTING;
-          ft8_button_down_time = 0;
+          ft8_button_deferred  = FT8_BTN_IDLE;
           progress  = 0;
         }
         else
@@ -4007,13 +4020,6 @@ static const bool do_ft8(void)
 
       if (ft8_ui_state == FT8_UI_AUTO) ft8_new_available = false;
       ft8_monitor_reset(&ft8mon);
-
-      // compensate button timer for the blocking decode period
-      if (ft8_button_down_time != 0 && ft8_button_down_time < decode_start)
-      {
-        const uint32_t decode_duration = millis() - decode_start;
-        ft8_button_down_time += decode_duration;
-      }
 
       ft8_state = FT8_STATE_WAITING;
       break;
@@ -4091,112 +4097,97 @@ static const bool do_ft8(void)
   // Records press start time; processes the action on release.
   // The receive state machine continues to run between samples.
   //--------------------------------------------------------------------------
-  if (ft8_state != FT8_STATE_TRANSMITTING)
+  ft8_btn_t btn = ft8_button_check();
+  if (btn == FT8_BTN_IDLE && ft8_button_deferred != FT8_BTN_IDLE)
   {
-    const bool button_pressed = (digitalRead(PIN_ENCBUT) == LOW);
-    if (ft8_button_down_time == 0 && button_pressed)
+    btn = ft8_button_deferred;
+    ft8_button_deferred = FT8_BTN_IDLE;
+  }
+  if (btn == FT8_BTN_LONG)
+  {
+    // long press — abort current activity (priority: QSO → CQ → exit)
+    progress = 0;
+    if (ft8_qso.active)
     {
-      // press starting — record time and continue
-      ft8_button_down_time = millis();
+      ft8_exit_pending_until = 0;
+      ft8_qso_abort();
+      ft8_state = FT8_STATE_WAITING;
     }
-    else if (ft8_button_down_time != 0 && !button_pressed)
+    else if (ft8_cq.active)
     {
-      // released — measure and act
-      const uint32_t held_ms = millis() - ft8_button_down_time;
-      // reset BEFORE any return false
-      ft8_button_down_time = 0;
-      if (held_ms < 50)
+      ft8_exit_pending_until = 0;
+      ft8_cq.active = false;
+      ft8_state = FT8_STATE_WAITING;
+      LOG(LOG_INFO, "CQ stopped\n");
+    }
+    else if (ft8_selected.valid)
+    {
+      // cancel pending single TX
+      ft8_exit_pending_until = 0;
+      ft8_selected.valid = false;
+      ft8_ui_state = FT8_UI_AUTO;
+      ft8_state = FT8_STATE_WAITING;
+    }
+    else
+    {
+      // Exit FT8 requires confirmation - long press twice within 5s
+      const uint32_t now_ms = millis();
+      if (ft8_exit_pending_until != 0 && now_ms < ft8_exit_pending_until)
       {
-        // debounce — ignore
+        // Confirmed
+        ft8_init();
+        ft8_state = FT8_STATE_WAITING;
+        return false;
       }
-      else if (held_ms >= FT8_BUTTON_LONG_PRESS)
+      // First long press - request confirmation
+      ft8_exit_pending_until = now_ms + 5000ul;
+      ft8_set_popup("Hold to exit","CONFIRM EXIT:");
+    }
+  }
+  else if (btn == FT8_BTN_SHORT)
+  {
+    // short press — action depends on UI state
+    ft8_last_interaction = millis();
+    switch (ft8_ui_state)
+    {
+      case FT8_UI_AUTO:
       {
-        // long press — abort current activity (priority: QSO → CQ → exit)
-        progress = 0;
-        if (ft8_qso.active)
+        ft8_cq_start(slot_calibrate_ms);
+        break;
+      }
+      case FT8_UI_BROWSE:
+      {
+        // don't replace an active QSO
+        if (ft8_qso.active) break;
+        if (ft8_display_count > 0 &&
+          ft8_cursor >= 0 &&
+          ft8_cursor < (int32_t)ft8_display_count)
         {
-          ft8_exit_pending_until = 0;
-          ft8_qso_abort();
-          ft8_state = FT8_STATE_WAITING;
-        }
-        else if (ft8_cq.active)
-        {
-          ft8_exit_pending_until = 0;
           ft8_cq.active = false;
-          ft8_state = FT8_STATE_WAITING;
-          LOG(LOG_INFO, "CQ stopped\n");
-        }
-        else if (ft8_selected.valid)
-        {
-          // cancel pending single TX
-          ft8_exit_pending_until = 0;
+          const ft8_history_entry_t* e = &ft8_display_buf[ft8_cursor];
+          memcpy(ft8_selected.text, e->text, FTX_MAX_DISPLAY_LENGTH);
+          ft8_selected.respond_in_even_slot = !e->received_in_even_slot;
+          ft8_selected.slot_number_low = e->slot_number_low;
           ft8_selected.valid = false;
-          ft8_ui_state = FT8_UI_AUTO;
-          ft8_state = FT8_STATE_WAITING;
-        }
-        else
-        {
-          // Exit FT8 requires confirmation - long press twice within 5s
-          const uint32_t now_ms = millis();
-          if (ft8_exit_pending_until != 0 && now_ms < ft8_exit_pending_until)
+          ft8_qso_start();
+          if (ft8_qso.active)
           {
-              // Confirmed
-              ft8_init();
-              ft8_state = FT8_STATE_WAITING;
-              return false;
+            // only valid if QSO actually started
+            ft8_selected.valid = true;       
+            ft8_ui_state = FT8_UI_SELECTED;
           }
-          // First long press - request confirmation
-          ft8_exit_pending_until = now_ms + 5000ul;
-          ft8_set_popup("Hold to exit","CONFIRM EXIT:");
+          else
+          {
+            ft8_set_popup("Not CQ/Your Call","INFO");
+          }
         }
+        break;
       }
-      else
+      case FT8_UI_SELECTED:
       {
-        // short press — action depends on UI state
-        ft8_last_interaction = millis();
-        switch (ft8_ui_state)
-        {
-          case FT8_UI_AUTO:
-          {
-            ft8_cq_start(slot_calibrate_ms);
-            break;
-          }
-          case FT8_UI_BROWSE:
-          {
-            // don't replace an active QSO
-            if (ft8_qso.active) break;
-            if (ft8_display_count > 0 &&
-              ft8_cursor >= 0 &&
-              ft8_cursor < (int32_t)ft8_display_count)
-            {
-              ft8_cq.active = false;
-              const ft8_history_entry_t* e = &ft8_display_buf[ft8_cursor];
-              memcpy(ft8_selected.text, e->text, FTX_MAX_DISPLAY_LENGTH);
-              ft8_selected.respond_in_even_slot = !e->received_in_even_slot;
-              ft8_selected.slot_number_low = e->slot_number_low;
-              ft8_selected.valid = false;
-              ft8_qso_start();
-              if (ft8_qso.active)
-              {
-                // only valid if QSO actually started
-                ft8_selected.valid = true;       
-                ft8_ui_state = FT8_UI_SELECTED;
-              }
-              else
-              {
-                ft8_set_popup("Not CQ/Your Call","INFO");
-              }
-            }
-            break;
-          }
-          case FT8_UI_SELECTED:
-          {
-            break;
-          }
-        }
+        break;
       }
     }
-    // Otherwise: button still up (do nothing) or still down (keep tracking)
   }
   //--------------------------------------------------------------------------
   // Update display every 50ms

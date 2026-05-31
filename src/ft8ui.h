@@ -131,3 +131,8 @@ typedef struct {
   bool even_slot; // our TX parity for this CQ session
 } ft8_cq_t;
 
+typedef enum {
+  FT8_BTN_IDLE,
+  FT8_BTN_SHORT,
+  FT8_BTN_LONG
+} ft8_btn_t;
