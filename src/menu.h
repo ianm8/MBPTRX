@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 17U
+#define NUM_MENU_ITEMS 18U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -53,6 +53,7 @@ enum menu_top_t
   MENU_CESSB,
   MENU_GRAPH_SWR,
   MENU_GAUSSIAN,
+  MENU_FT8,
   MENU_EXIT
 };
 
@@ -141,6 +142,12 @@ enum option_value_t
   OPTION_CESSB_OFF,
   OPTION_GRAPH_SWR_Y,
   OPTION_GRAPH_SWR_N,
+  OPTION_FT8_CQ_CQ,
+  OPTION_FT8_CQ_DX,
+  OPTION_FT8_CQ_WWFF,
+  OPTION_FT8_CQ_POTA,
+  OPTION_FT8_CQ_SOTA,
+  OPTION_FT8_CALSET,
   OPTION_NONE,
   OPTION_EXIT
 };
@@ -262,6 +269,24 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_NONE,"None"}
     }
   },
+  {
+    MENU_FT8,
+    "FT8 Options",
+    7U,
+    {
+      {OPTION_FT8_CQ_CQ,"CQ"},
+      {OPTION_FT8_CQ_DX,"CQ DX"},
+      {OPTION_FT8_CQ_WWFF,"CQ WWFF"},
+      {OPTION_FT8_CQ_POTA,"CQ POTA"},
+      {OPTION_FT8_CQ_SOTA,"CQ SOTA"},
+      {OPTION_FT8_CALSET,"Reset Cal"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
+    }
+  },
+
   {
     MENU_CW_SPEED,
     "CW Speed",

@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 5.1.240
+ * MBPTRX Version 5.3.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -69,6 +69,8 @@
  *  4.4.240 minor update to spectrum processing
  *  5.0.240 FT8 built in
  *  5.1.240 FT8 refactor button press
+ *  5.2.240 FT8 menu options
+ *  5.3.240 FT8 pop-up CQ or response
  */
 
 //#define DEBUGGING_SKIP
@@ -104,7 +106,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V5.1."
+#define VERSION_STRING "  V5.3."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -271,6 +273,15 @@ static_assert((MAX_ADC_SAMPLES & (MAX_ADC_SAMPLES - 1)) == 0, "MAX_ADC_SAMPLES m
 #define ERROR_FWDADC   7u
 #define ERROR_REFADC   8u
 
+enum ft8_call_t
+{
+  FT8_CQ_CQ,
+  FT8_CQ_DX,
+  FT8_CQ_WWFF,
+  FT8_CQ_POTA,
+  FT8_CQ_SOTA
+};
+
 enum radio_mode_t
 {
   MODE_LSB,
@@ -301,6 +312,7 @@ volatile static struct
   uint32_t micproc;
   uint32_t bandwidth;
   radio_mode_t mode;
+  ft8_call_t ft8_cq;
   bool tx_safe;
   bool tx_button;
   bool tx_enable;
@@ -331,6 +343,7 @@ radio =
   DEFAULT_MICPROC,
   DEFAULT_BANDWIDTH,
   DEFAULT_MODE,
+  FT8_CQ_CQ,
   false,
   false,
   false,
@@ -1748,8 +1761,8 @@ static void show_menu(void)
     {
       char sz_menu_name[16] = "";
       memset(sz_menu_name,' ',sizeof(sz_menu_name));
-      sz_menu_name[10] = '\0';
-      for (int k=0;k<10;k++)
+      sz_menu_name[12] = '\0';
+      for (int k=0;k<12;k++)
       {
         const char c = menu_options[i].menu_name[k];
         if (c=='\0') break;
@@ -3190,6 +3203,18 @@ static bool ft8_cq_start(const uint32_t slot_calibrate_ms)
   ft8_cq.attempts = 0;
   ft8_cq.active = true;
 
+  // Show popup for non-standard CQ types
+  // so user can confirm their selection
+  const char *sz_cq_type = NULL;
+  switch (radio.ft8_cq)
+  {
+    case FT8_CQ_DX:   sz_cq_type = "CQ DX";   break;
+    case FT8_CQ_WWFF: sz_cq_type = "CQ WWFF"; break;
+    case FT8_CQ_POTA: sz_cq_type = "CQ POTA"; break;
+    case FT8_CQ_SOTA: sz_cq_type = "CQ SOTA"; break;
+  }
+  if (sz_cq_type) ft8_set_popup(sz_cq_type, "CALLING:");
+
   LOG(LOG_INFO, "CQ start: %.0f Hz, next %s slot\n",
     freq, !this_even ? "EVEN" : "ODD");
   return true;
@@ -3201,8 +3226,17 @@ static bool ft8_cq_start(const uint32_t slot_calibrate_ms)
 //------------------------------------------------------------------------------
 static bool ft8_cq_transmit(const uint32_t slot_calibrate_ms, const ft8_state_t ft8_state)
 {
+  const char *sz_cq_type = "";
+  switch (radio.ft8_cq)
+  {
+    case FT8_CQ_DX:   sz_cq_type = " DX";   break;
+    case FT8_CQ_WWFF: sz_cq_type = " WWFF"; break;
+    case FT8_CQ_POTA: sz_cq_type = " POTA"; break;
+    case FT8_CQ_SOTA: sz_cq_type = " SOTA"; break;
+  }
+
   char msg[FTX_MAX_MESSAGE_LENGTH];
-  snprintf(msg, sizeof(msg), "CQ %s %s", YOUR_CALL, YOUR_GRID);
+  snprintf(msg, sizeof(msg), "CQ%s %s %s", sz_cq_type, YOUR_CALL, YOUR_GRID);
 
   uint8_t tones[FT8_NN];
   memset(tones, 0, sizeof(tones));
@@ -3216,8 +3250,7 @@ static bool ft8_cq_transmit(const uint32_t slot_calibrate_ms, const ft8_state_t 
   set_frequency((uint32_t)((ft8_cq.audio_freq + tone0) * 100.0f));
 
   ft8_enable_tx();
-  const bool ok = ft8_transmit_tones(tones, ft8_cq.audio_freq,
-    slot_calibrate_ms, ft8_state);
+  const bool ok = ft8_transmit_tones(tones, ft8_cq.audio_freq, slot_calibrate_ms, ft8_state);
   ft8_disable_tx();
 
   ft8_cq.attempts++;
@@ -3302,8 +3335,8 @@ static bool ft8_parse_cq(
         if (!is_digit(tokens[1][i])) all_digit = false;
       }
       if ((all_alpha && t1_len == 2) || // regional codes
-          (all_alpha && t1_len == 4) || // 4-letter named modifiers
-          (all_digit && t1_len == 3))   // 3-digit number
+        (all_alpha && t1_len == 4) || // 4-letter named modifiers
+        (all_digit && t1_len == 3))   // 3-digit number
         t1_is_modifier = true;
     }
     callsign = t1_is_modifier ? tokens[2] : tokens[1];
@@ -3836,13 +3869,20 @@ static void ft8_init(void)
 // Called from loop1() on core 1 while radio.mode == MODE_FT8
 // Returns false to exit FT8 mode
 //------------------------------------------------------------------------------
-static const bool do_ft8(void)
+static const bool do_ft8(const bool cal_reset = false)
 {
   // Persistent state across calls
   static uint32_t slot_calibrate_ms = 0;
   static uint32_t progress = 0;
   static ft8_state_t ft8_state = FT8_STATE_WAITING;
   static bool ft8_hash_init = false;
+
+  // reset calibration
+  if (cal_reset)
+  {
+    slot_calibrate_ms = 0;
+    return false;
+  }
 
   //--------------------------------------------------------------------------
   // One-time calibration on first entry
@@ -4017,6 +4057,25 @@ static const bool do_ft8(void)
       ft8_history_add(ft8_lines, n, even_slot, (uint8_t)slot_num);
 
       if (ft8_qso.active) ft8_qso_check_rx(ft8_lines, n);
+
+      // During CQ, look for responses we might miss in the scrolling display
+      if (ft8_cq.active && !ft8_qso.active)
+      {
+        for (uint32_t i = 0; i < n; i++)
+        {
+          float dummy_freq = 0;
+          char their_call[12] = "";
+          char their_grid[8]  = "";
+          if (ft8_parse_direct_call(ft8_lines[i], dummy_freq, their_call, their_grid))
+          {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%s %s", their_call, their_grid);
+            ft8_set_popup(buf, "RESPONSE:");
+            // one popup is enough per slot
+            break;
+          }
+        }
+      }
 
       if (ft8_ui_state == FT8_UI_AUTO) ft8_new_available = false;
       ft8_monitor_reset(&ft8mon);
@@ -4333,6 +4392,12 @@ void loop1(void)
         case OPTION_GAUSSIAN_OFF:    radio.gaussian = false;                         break;
         case OPTION_GRAPH_SWR_Y:     radio.graph_swr = true;                         break;
         case OPTION_GRAPH_SWR_N:     radio.graph_swr = false;                        break;
+        case OPTION_FT8_CQ_CQ:       radio.ft8_cq = FT8_CQ_CQ;                       break;
+        case OPTION_FT8_CQ_DX:       radio.ft8_cq = FT8_CQ_DX;                       break;
+        case OPTION_FT8_CQ_WWFF:     radio.ft8_cq = FT8_CQ_WWFF;                     break;
+        case OPTION_FT8_CQ_POTA:     radio.ft8_cq = FT8_CQ_POTA;                     break;
+        case OPTION_FT8_CQ_SOTA:     radio.ft8_cq = FT8_CQ_SOTA;                     break;
+        case OPTION_FT8_CALSET:      do_ft8(true);                                   break;
         case OPTION_EXIT:            radio.menu_active = false;                      break;
       }
 

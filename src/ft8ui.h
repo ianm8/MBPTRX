@@ -124,14 +124,16 @@ typedef struct
   bool is_direct;
 } ft8_qso_t;
 
-typedef struct {
+typedef struct
+{
   bool active;
   float audio_freq;
   uint8_t attempts;
   bool even_slot; // our TX parity for this CQ session
 } ft8_cq_t;
 
-typedef enum {
+typedef enum
+{
   FT8_BTN_IDLE,
   FT8_BTN_SHORT,
   FT8_BTN_LONG
