@@ -52,3 +52,5 @@
  * 4.4.240 minor update to spectrum processing
  * 5.0.240 FT8 built in
  * 5.1.240 FT8 refactor button press
+ * 5.2.240 FT8 menu options
+ * 5.3.240 FT8 pop-up CQ or response
