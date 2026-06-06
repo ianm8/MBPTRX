@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 5.3.240
+ * MBPTRX Version 5.4.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -71,6 +71,7 @@
  *  5.1.240 FT8 refactor button press
  *  5.2.240 FT8 menu options
  *  5.3.240 FT8 pop-up CQ or response
+ *  5.4.240 spectrum process regression
  */
 
 //#define DEBUGGING_SKIP
@@ -106,7 +107,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V5.3."
+#define VERSION_STRING "  V5.4."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -2244,10 +2245,7 @@ void __not_in_flash_func(loop)(void)
 
 static void process_spectrum(void)
 {
-  static uint32_t last_offset = UINT32_MAX;
   uint32_t offset = 0;
-  const int8_t ga = (radio.mode==MODE_DGL || radio.mode==MODE_DGU)?-3:0;
-  const int8_t gain = radio.tx_enable?ga:radio.level[radio.band];
   const uint32_t sample_p = adc_sample_p;
   if (sample_p<800)
   {
@@ -2263,18 +2261,16 @@ static void process_spectrum(void)
   {
     return;
   }
-  if (offset != last_offset)
+  static int16_t data_re[SPECTRUM_BUFFER] = {0};
+  static int16_t data_im[SPECTRUM_BUFFER] = {0};
+  const int8_t ga = (radio.mode==MODE_DGL || radio.mode==MODE_DGU)?-3:0;
+  const int8_t gain = radio.tx_enable?ga:radio.level[radio.band];
+  for (uint32_t i=0;i<SPECTRUM_BUFFER;i++)
   {
-    last_offset = offset;
-    int16_t data_re[SPECTRUM_BUFFER] = {0};
-    int16_t data_im[SPECTRUM_BUFFER] = {0};
-    for (uint32_t i=0;i<SPECTRUM_BUFFER;i++)
-    {
-      data_re[i] = adc_data_i[i+offset];
-      data_im[i] = adc_data_q[i+offset];
-    }
-    spectrum::process(data_re,data_im,magnitude,gain);
+    data_re[i] = adc_data_i[i+offset];
+    data_im[i] = adc_data_q[i+offset];
   }
+  spectrum::process(data_re,data_im,magnitude,gain);
 }
 
 
