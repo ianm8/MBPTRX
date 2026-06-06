@@ -54,3 +54,4 @@
  * 5.1.240 FT8 refactor button press
  * 5.2.240 FT8 menu options
  * 5.3.240 FT8 pop-up CQ or response
+ * 5.4.240 spectrum process regression
