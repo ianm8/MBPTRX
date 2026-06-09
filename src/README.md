@@ -55,3 +55,6 @@
  * 5.2.240 FT8 menu options
  * 5.3.240 FT8 pop-up CQ or response
  * 5.4.240 spectrum process regression
+ * 5.5.240 progress resets on long press
+ * 5.6.240 modifier seen as callsign
+ * 5.7.240 fix frozen age colour
