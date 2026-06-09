@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 5.4.240
+ * MBPTRX Version 5.7.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -72,6 +72,9 @@
  *  5.2.240 FT8 menu options
  *  5.3.240 FT8 pop-up CQ or response
  *  5.4.240 spectrum process regression
+ *  5.5.240 progress resets on long press
+ *  5.6.240 modifier seen as callsign
+ *  5.7.240 fix frozen age colour
  */
 
 //#define DEBUGGING_SKIP
@@ -107,7 +110,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V5.4."
+#define VERSION_STRING "  V5.7."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -2500,6 +2503,7 @@ static uint32_t ft8_history_head = 0;
 // Frozen display snapshot - taken when user first touches the rotary
 static ft8_history_entry_t ft8_display_buf[FT8_HISTORY_SIZE] = { 0 };
 static uint32_t ft8_display_count = 0;
+static uint32_t ft8_cal_freeze = 0;
 
 // UI state
 static bool ft8_new_available = false; // new decodes since last freeze
@@ -2755,7 +2759,7 @@ static void ft8_show_decoded(const uint32_t slot_calibrate_ms)
     if (total == 0)
     {
       lcd.setCursor(0, 40);
-      lcd.setTextColor(LCD_DARKGREY, LCD_BLACK);
+      lcd.setTextColor(LCD_WHITE, LCD_BLACK);
       lcd.print("Waiting for FT8 signals...");
       return;
     }
@@ -2816,7 +2820,7 @@ static void ft8_show_decoded(const uint32_t slot_calibrate_ms)
       else if (is_cursor) lcd.setTextColor(LCD_BLACK, LCD_WHITE);
       else if (is_mycall) lcd.setTextColor(LCD_WHITE, LCD_RED);
       else if (is_cq) lcd.setTextColor(LCD_WHITE, LCD_BLUE);
-      else if (is_old) lcd.setTextColor(LCD_DARKGREY, LCD_BLACK);
+      else if (is_old) lcd.setTextColor(FT8_AGED_COLOUR, LCD_BLACK);
       else lcd.setTextColor(LCD_WHITE, LCD_BLACK);
 
       // Parity prefix: E=even slot, O=odd slot
@@ -3151,7 +3155,6 @@ static const ft8_btn_t ft8_button_check(void)
 // DECODE CALLBACK
 // Called every N candidates during ft8_decode() so the UI stays responsive.
 //------------------------------------------------------------------------------
-static uint32_t ft8_cal_freeze = 0;
 static void ft8_ui_callback(void)
 {
   // update display,
@@ -3310,37 +3313,26 @@ static bool ft8_parse_cq(
   // A modifier is "DX" or regional code or 3-digit number or 4 letters.
   const char* callsign = NULL;
   const char* grid = NULL;
-
   if (tokens[2][0] != '\0')
   {
-    // Check if tokens[1] looks like a modifier (DX, or 3 digits, or 4 letters)
-    bool t1_is_modifier = false;
-    if (equals(tokens[1], "DX"))
+    // tokens[1] is either a modifier or the callsign
+    // a standard callsign contains BOTH a letter and a digit (e.g. ZL1XYZ)
+    // a modifier is all-alpha (DX, NA, ABC, POTA) or all-digit (3-digit number)
+    bool has_letter = false;
+    bool has_digit  = false;
+    for (int i = 0; tokens[1][i]; i++)
     {
-      t1_is_modifier = true;
+      if (is_letter(tokens[1][i])) has_letter = true;
+      if (is_digit(tokens[1][i])) has_digit  = true;
     }
-    else
-    {
-      // 2-letter alpha = regional code (DX, NA, EU, SA, AS, AF, OC, plus future)
-      const int t1_len = (int)strlen(tokens[1]);
-      bool all_alpha = true;
-      bool all_digit = true;
-      for (int i = 0; tokens[1][i]; i++)
-      {
-        if (!is_letter(tokens[1][i])) all_alpha = false;
-        if (!is_digit(tokens[1][i])) all_digit = false;
-      }
-      if ((all_alpha && t1_len == 2) || // regional codes
-        (all_alpha && t1_len == 4) || // 4-letter named modifiers
-        (all_digit && t1_len == 3))   // 3-digit number
-        t1_is_modifier = true;
-    }
+    const bool t1_is_modifier = !(has_letter && has_digit);
     callsign = t1_is_modifier ? tokens[2] : tokens[1];
     grid = t1_is_modifier ? tokens[3] : tokens[2];
   }
   else if (tokens[1][0] != '\0')
   {
-    callsign = tokens[1];  // just "CQ VK3ABC" with no grid
+    // just "CQ VK3ABC" with no grid
+    callsign = tokens[1];
   }
 
   if (!callsign || callsign[0] == '\0') return false;
@@ -4161,15 +4153,16 @@ static const bool do_ft8(const bool cal_reset = false)
   if (btn == FT8_BTN_LONG)
   {
     // long press — abort current activity (priority: QSO → CQ → exit)
-    progress = 0;
     if (ft8_qso.active)
     {
+      progress = 0;
       ft8_exit_pending_until = 0;
       ft8_qso_abort();
       ft8_state = FT8_STATE_WAITING;
     }
     else if (ft8_cq.active)
     {
+      progress = 0;
       ft8_exit_pending_until = 0;
       ft8_cq.active = false;
       ft8_state = FT8_STATE_WAITING;
@@ -4178,6 +4171,7 @@ static const bool do_ft8(const bool cal_reset = false)
     else if (ft8_selected.valid)
     {
       // cancel pending single TX
+      progress = 0;
       ft8_exit_pending_until = 0;
       ft8_selected.valid = false;
       ft8_ui_state = FT8_UI_AUTO;
@@ -4190,6 +4184,7 @@ static const bool do_ft8(const bool cal_reset = false)
       if (ft8_exit_pending_until != 0 && now_ms < ft8_exit_pending_until)
       {
         // Confirmed
+        progress = 0;
         ft8_init();
         ft8_state = FT8_STATE_WAITING;
         return false;
