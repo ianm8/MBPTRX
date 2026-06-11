@@ -13,6 +13,10 @@ Here is a block diagram:
 
 ![alt text](https://github.com/ianm8/MBPTRX/blob/main/docs/MBPTRX.png?raw=true)
 
+Built in FT8:
+
+![alt text](https://github.com/ianm8/MBPTRX/blob/main/docs/Build-In-FT8.jpg)
+
 Completed PCB:
 
 ![alt text](https://github.com/ianm8/MBPTRX/blob/main/docs/MBPTRX-PCB-Complete.jpg?raw=true)
