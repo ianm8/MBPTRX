@@ -54,7 +54,7 @@
 #define FT8_PWR_X       13
 #define FT8_PWR_Y       13
 
-#define FT8_AGED_COLOUR _rev(0x3186)
+#define FT8_AGED_COLOUR (lcd.color565(180, 180, 180))
 
 //------------------------------------------------------------------------------
 // FT8 STATE MACHINES
@@ -124,6 +124,7 @@ typedef struct
   bool active;
   bool popup_shown;
   bool is_direct;
+  bool poached;
 } ft8_qso_t;
 
 typedef struct

@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 5.7.240
+ * MBPTRX Version 5.8.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -72,9 +72,10 @@
  *  5.2.240 FT8 menu options
  *  5.3.240 FT8 pop-up CQ or response
  *  5.4.240 spectrum process regression
- *  5.5.240 progress resets on long press
- *  5.6.240 modifier seen as callsign
- *  5.7.240 fix frozen age colour
+ *  5.5.240 FT8 progress resets on long press
+ *  5.6.240 FT8 modifier seen as callsign
+ *  5.7.240 FT8 fix frozen age colour
+ *  5.8.240 FT8 detect poached QSO
  */
 
 //#define DEBUGGING_SKIP
@@ -110,7 +111,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V5.7."
+#define VERSION_STRING "  V5.8."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -2641,9 +2642,10 @@ static void ft8_show_pulse(void)
 {
   if (millis() % 1000 < 500)
   {
+    const bool poached = ft8_qso.poached && ft8_qso.active;
     lcd.setFreeFont(&Arial_Bold14pt7b);
     lcd.setTextSize(1);
-    lcd.setTextColor(LCD_BLUE,LCD_BLACK);
+    lcd.setTextColor(poached?LCD_RED:LCD_BLUE,LCD_BLACK);
     lcd.setCursor(FT8_PULSE_X,FT8_PULSE_Y);
     lcd.print("*");
   }
@@ -2818,10 +2820,9 @@ static void ft8_show_decoded(const uint32_t slot_calibrate_ms)
       // Slot parity indicator prefix (1 char)
       if (is_selected) lcd.setTextColor(LCD_BLACK, LCD_GREEN);
       else if (is_cursor) lcd.setTextColor(LCD_BLACK, LCD_WHITE);
-      else if (is_mycall) lcd.setTextColor(LCD_WHITE, LCD_RED);
-      else if (is_cq) lcd.setTextColor(LCD_WHITE, LCD_BLUE);
-      else if (is_old) lcd.setTextColor(FT8_AGED_COLOUR, LCD_BLACK);
-      else lcd.setTextColor(LCD_WHITE, LCD_BLACK);
+      else if (is_mycall) lcd.setTextColor(is_old?FT8_AGED_COLOUR:LCD_WHITE, LCD_RED);
+      else if (is_cq) lcd.setTextColor(is_old?FT8_AGED_COLOUR:LCD_WHITE, LCD_BLUE);
+      else lcd.setTextColor(is_old?FT8_AGED_COLOUR:LCD_WHITE, LCD_BLACK);
 
       // Parity prefix: E=even slot, O=odd slot
       lcd.print(e->received_in_even_slot ? "E" : "O");
@@ -3771,6 +3772,7 @@ static void ft8_qso_check_rx(
     // ── Good match ────────────────────────────────────────────────────
     strncpy(row->text, msg, FTX_MAX_DISPLAY_LENGTH - 1);
     row->state = FT8_QSO_ROW_DONE;
+    ft8_qso.poached = false;
 
     // CQ-response R3 (step 2): extract their report → build R+report for T4
     if (!ft8_qso.is_direct && step == 2 && last_sp && last_sp[1] != '\0')
@@ -3822,6 +3824,92 @@ static void ft8_qso_check_rx(
 
   LOG(LOG_INFO, "QSO step %d: no reply attempt %d\n", step, row->attempts);
 }
+
+//------------------------------------------------------------------------------
+// Detect the station we're working replying to a THIRD party (we've lost it).
+// Also recovers the third party's own TX frequency if it appears this slot.
+//------------------------------------------------------------------------------
+static bool ft8_qso_detect_poach(
+  const char lines[][FTX_MAX_DISPLAY_LENGTH],
+  const uint32_t count,
+  char* third_call_out,  // >= 12
+  float& third_freq_out, // their freq, or -1 if unknown
+  bool& freq_is_theirs)  // true if third_freq is the third party's own TX
+{
+  if (!ft8_qso.active) return false;
+  const int step = ft8_qso.current_step;
+  if (step < 0 || step >= ft8_qso.num_rows) return false;
+  if (ft8_qso.rows[step].is_tx) return false; // only while awaiting their reply
+
+  char poached[12] = "";
+  third_freq_out = -1.0f;
+  freq_is_theirs = false;
+
+  // Pass 1: find VK3ABC transmitting to a third party (confirmed poach)
+  for (uint32_t i = 0; i < count; i++)
+  {
+    float snr = 0.0f;
+    float dt = 0.0f;
+    float freq = 0.0f;
+    char msg[FTX_MAX_MESSAGE_LENGTH] = "";
+    if (sscanf(lines[i], "%f %f %f %34[^\n]", &snr, &dt, &freq, msg) < 4) continue;
+    if (strncmp(msg, "CQ", 2) == 0) continue;
+    if (strstr(msg, YOUR_CALL)) continue; // that's our reply
+    if (!strstr(msg, ft8_qso.their_call)) continue;
+
+    char to[16] = "";
+    char from[16] = "";
+    const char* p = msg;
+    p = copy_token(to, sizeof(to), p);
+    p = copy_token(from, sizeof(from), p);
+
+    // their_call is the SENDER → they're working "to"
+    if (equals(from, ft8_qso.their_call) && to[0])
+    {
+      bool hl = false;
+      bool hd = false;
+      for (int k = 0; to[k]; k++)
+      {
+        if (is_letter(to[k])) hl = true;
+        if (is_digit(to[k])) hd = true;
+      }
+      if (hl && hd)
+      {
+        strncpy(poached, to, 11);
+        poached[11] ='\0';
+        break;
+      }
+    }
+  }
+  if (poached[0] == '\0') return false; // no confirmed poach
+
+  strncpy(third_call_out, poached, 11);
+  third_call_out[11] = '\0';
+
+  // Pass 2: did the poached station transmit on its own freq this slot?
+  // i.e. "VK3ABC W1XYZ ..." → from = poached, freq = poached's TX freq
+  for (uint32_t i = 0; i < count; i++)
+  {
+    float snr = 0.0f;
+    float dt = 0.0f;
+    float freq = 0.0f;
+    char msg[FTX_MAX_MESSAGE_LENGTH] = "";
+    if (sscanf(lines[i], "%f %f %f %34[^\n]", &snr, &dt, &freq, msg) < 4) continue;
+    char to[16] = "";
+    char from[16] = "";
+    const char* p = msg;
+    p = copy_token(to, sizeof(to), p);
+    p = copy_token(from, sizeof(from), p);
+    if (equals(from, poached))
+    {
+      third_freq_out = freq;
+      freq_is_theirs = true;
+      break;
+    }
+  }
+  return true;
+}
+
 //------------------------------------------------------------------------------
 // ft8_qso_abort()
 // Clean abort — returns to history browse, stays in FT8 mode.
@@ -4045,6 +4133,30 @@ static const bool do_ft8(const bool cal_reset = false)
       ft8_history_add(ft8_lines, n, even_slot, (uint8_t)slot_num);
 
       if (ft8_qso.active) ft8_qso_check_rx(ft8_lines, n);
+
+      // detect if the station we're working is being poached
+      if (ft8_qso.active)
+      {
+        // still active = they didn't reply to us this slot
+        char third[12] = "";
+        float third_freq = -1.0f;
+        bool freq_is_theirs = false;
+        if (ft8_qso_detect_poach(ft8_lines, n, third, third_freq, freq_is_theirs))
+        {
+          char buf[40] = "";
+          if (freq_is_theirs && third_freq > 0.0f)
+          {
+            const int32_t df = (int32_t)(third_freq - ft8_qso.audio_freq);
+            snprintf(buf,sizeof(buf),"%s %d%s",third,(int)third_freq,(abs(df)<60)?" CLASH":"");
+          }
+          else
+          {
+            snprintf(buf, sizeof(buf), "Lost to %s", third);
+          }
+          ft8_qso.poached = true;
+          ft8_set_popup(buf, "WORKING OTHER:");
+        }
+      }
 
       // During CQ, look for responses we might miss in the scrolling display
       if (ft8_cq.active && !ft8_qso.active)
