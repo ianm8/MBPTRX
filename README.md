@@ -1,6 +1,14 @@
 # MBPTRX
 A software defined multi-band phasing transceiver.
 
+## Some Specifications
+ * SSB, CW, FT8, Other digital modes using vox
+ * 80m - 10m, nominally 10W
+ * 3.5MHz - 30MHz SWL
+ * 30 KHz spectrum display
+ * Noise reduction
+ * Noise blanker
+
 Here is a block diagram:
 
 ![alt text](https://github.com/ianm8/MBPTRX/blob/main/docs/MBPTRX.png?raw=true)
