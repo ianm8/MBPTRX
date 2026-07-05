@@ -59,3 +59,4 @@
  * 5.6.240 FT8 modifier seen as callsign
  * 5.7.240 FT8 fix frozen age colour
  * 5.8.240 FT8 detect poached QSO
+ * 5.9.240 fix s-meter sensitivity
