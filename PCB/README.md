@@ -10,3 +10,5 @@ All SM capacitors are 1206 NP0 or C0G except for the 22uF and 100uF capacitors.
 All SM inductors are 1206 for as high SRF as possible (ie, greater than 30MHz), except for L23 which has a specific part number.
 
 # Build notes
+The MMG3H21NT1 is now obsolete but you can use a GVA-84+ from Mini Circuits.
+
