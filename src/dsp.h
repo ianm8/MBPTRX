@@ -37,49 +37,44 @@ namespace DSP
   {
     // S9 = -73dBm = 141uV PP
     // need to return 10 for S9
-    const bool hiband = (f > 15000000ul);
-    if (hiband)
+    static constexpr float GAIN_3dB = 1.5f;
+    static constexpr float GAIN_6dB = 2.0f;
+    static constexpr float GAIN_9dB = 3.0f;
+    static constexpr float GAIN_12dB = 4.0f;
+    static constexpr float GAIN_15dB = 6.0f;
+    static constexpr float GAIN_18dB = 8.0f;
+    float sensitivity = 1.0f;
+    if (f > 22000000ul)
     {
-      static const float hiadjust = 4.0f;
-      static const float S0_sig = 100.0f / hiadjust;
-      static const float S9_sig = 300.0f / hiadjust;
-      static const float S9p_sig = 8192.0f/ hiadjust;
-      static const uint32_t S9_from_min = (uint32_t)(log10f(S0_sig) * 1024.0f);
-      static const uint32_t S9_from_max = (uint32_t)(log10f(S9_sig) * 1024.0f);
-      static const uint32_t S9_min = 0ul;
-      static const uint32_t S9_max = 10ul;
-      static const uint32_t S9p_from_min = (uint32_t)(log10f(S9_sig) * 1024.0f);
-      static const uint32_t S9p_from_max = (uint32_t)(log10f(S9p_sig) * 1024.0f);
-      static const uint32_t S9p_min = 11ul;
-      static const uint32_t S9p_max = 15ul;
-      if (agc_peak<1.0f)
-      {
-        return 0u;
-      }
-      const uint32_t log_peak = (uint32_t)(log10f(agc_peak) * 1024.0f);
-      if (agc_peak>S9_sig)
-      {
-        return (uint8_t)UTIL::map(log_peak,S9p_from_min,S9p_from_max,S9p_min,S9p_max);
-      }
-      return (uint8_t)UTIL::map(log_peak,S9_from_min,S9_from_max,S9_min,S9_max);
+      sensitivity = GAIN_18dB;
     }
-    static const float S0_sig = 100.0f;
-    static const float S9_sig = 300.0f;
-    static const float S9p_sig = 8192.0f;
-    static const uint32_t S9_from_min = (uint32_t)(log10f(S0_sig) * 1024.0f);
-    static const uint32_t S9_from_max = (uint32_t)(log10f(S9_sig) * 1024.0f);
-    static const uint32_t S9_min = 0ul;
-    static const uint32_t S9_max = 10ul;
-    static const uint32_t S9p_from_min = (uint32_t)(log10f(S9_sig) * 1024.0f);
-    static const uint32_t S9p_from_max = (uint32_t)(log10f(S9p_sig) * 1024.0f);
-    static const uint32_t S9p_min = 11ul;
-    static const uint32_t S9p_max = 15ul;
-    if (agc_peak<1.0f)
+    else if (f > 18000000ul)
+    {
+      sensitivity = GAIN_12dB;
+    }
+    else if (f > 10000000ul && f < 11000000ul)
+    {
+      sensitivity = GAIN_6dB;
+    }
+    // add compensation gain to agc_peak
+    const float comp_agc_peak = agc_peak * sensitivity;
+    if (comp_agc_peak<1.0f)
     {
       return 0u;
     }
-    const uint32_t log_peak = (uint32_t)(log10f(agc_peak) * 1024.0f);
-    if (agc_peak>S9_sig)
+    static constexpr float S0_sig = 100.0f;
+    static constexpr float S9_sig = 300.0f;
+    static constexpr float S9p_sig = 8192.0f;
+    static constexpr uint32_t S9_from_min = (uint32_t)(log10f(S0_sig) * 1024.0f);
+    static constexpr uint32_t S9_from_max = (uint32_t)(log10f(S9_sig) * 1024.0f);
+    static constexpr uint32_t S9_min = 0ul;
+    static constexpr uint32_t S9_max = 10ul;
+    static constexpr uint32_t S9p_from_min = (uint32_t)(log10f(S9_sig) * 1024.0f);
+    static constexpr uint32_t S9p_from_max = (uint32_t)(log10f(S9p_sig) * 1024.0f);
+    static constexpr uint32_t S9p_min = 11ul;
+    static constexpr uint32_t S9p_max = 15ul;
+    const uint32_t log_peak = (uint32_t)(log10f(comp_agc_peak) * 1024.0f);
+    if (comp_agc_peak>S9_sig)
     {
       return (uint8_t)UTIL::map(log_peak,S9p_from_min,S9p_from_max,S9p_min,S9p_max);
     }
@@ -148,11 +143,11 @@ namespace DSP
   } 
 
   static const int16_t __not_in_flash_func(process_ssb)(
-      const int16_t in_i,
-      const int16_t in_q,
-      const uint32_t jnr_level,
-      const uint8_t bw,
-      const uint8_t nb_level)
+    const int16_t in_i,
+    const int16_t in_q,
+    const uint32_t jnr_level,
+    const uint8_t bw,
+    const uint8_t nb_level)
   {
     // quadrature mixer
 

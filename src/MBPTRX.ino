@@ -1,5 +1,5 @@
 /*
- * MBPTRX Version 5.8.240
+ * MBPTRX Version 5.9.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -76,6 +76,7 @@
  *  5.6.240 FT8 modifier seen as callsign
  *  5.7.240 FT8 fix frozen age colour
  *  5.8.240 FT8 detect poached QSO
+ *  5.9.240 fix s-meter sensitivity
  */
 
 //#define DEBUGGING_SKIP
@@ -111,7 +112,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V5.8."
+#define VERSION_STRING "  V5.9."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
