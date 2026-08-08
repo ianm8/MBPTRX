@@ -2,16 +2,18 @@
 #define DSP_H
 
 #include "filter.h"
+#include "notch.h"
 #include "util.h"
 
 namespace DSP
 {
+  static notch_t notch;
   volatile static float agc_peak = 0.0f;
 
   static const int16_t __not_in_flash_func(agc)(const float in)
   {
-    // limit gain to max of 40 (32db)
-    static const float max_gain = 40.0f;
+    // limit gain to max of 100 (40db)
+    static const float max_gain = 100.0f;
     // decay about 10dB per second
     static const float k = 0.99996f;
 
@@ -151,6 +153,7 @@ namespace DSP
   {
     // quadrature mixer
 
+    // quadrature LO = 7812 (quadrature: 31250/4/4 = 1)
     // quadrature LO = 3906 (quadrature: 31250/8/4 = 2)
     // quadrature LO = 1953 (quadrature: 31250/16/4 = 4)
     // quadrature LO = 977 (quadrature: 31250/32/4 = 8)
@@ -191,8 +194,11 @@ namespace DSP
     // HPF
     const float audio_raw = FILTER::hpf_200f(audio_lpf);
 
+    // notch
+    const float audio_notch = notch.process(audio_raw);
+
     // JNR
-    const float audio_out = FILTER::jnr(audio_raw,jnr_level);
+    const float audio_out = FILTER::jnr(audio_notch,jnr_level);
 
     // AGC returns 12 bit value
     return agc(audio_out * 32768.0f);
@@ -316,7 +322,7 @@ namespace DSP
     // Remove DC
 
     // AGC settings
-    static const float max_gain = 40.0f;
+    static const float max_gain = 200.0f;
     static const float k = 0.99996f;
 
     // extract AM signal from USB @ FS/4
@@ -406,6 +412,8 @@ namespace DSP
 
   static void __not_in_flash_func(cessb)(float& ii, float& qq)
   {
+    ii *= 1.5f;
+    qq *= 1.5f;
     const float mag_raw = sqrtf(ii*ii + qq*qq);
     const float mag_max = fmaxf(mag_raw, 1.0f);
     ii = FILTER::lpf_2600if_tx(ii / mag_max);

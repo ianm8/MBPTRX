@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 18U
+#define NUM_MENU_ITEMS 19U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -41,6 +41,7 @@ enum menu_top_t
   MENU_STEP,
   MENU_MODE,
   MENU_BANDWIDTH,
+  MENU_NOTCH,
   MENU_CW_SPEED,
   MENU_CW_DECODE,
   MENU_SIDETONE,
@@ -89,6 +90,8 @@ enum option_value_t
   OPTION_BW_2400,
   OPTION_BW_2600,
   OPTION_BW_2800,
+  OPTION_NOTCH_ON,
+  OPTION_NOTCH_OFF,
   OPTION_GAUSSIAN_ON,
   OPTION_GAUSSIAN_OFF,
   OPTION_CW_SPEED_10,
@@ -270,6 +273,23 @@ menu_options[NUM_MENU_ITEMS] =
     }
   },
   {
+    MENU_NOTCH,
+    "Notch Filter",
+    3U,
+    {
+      {OPTION_NOTCH_ON,"Notch On"},
+      {OPTION_NOTCH_OFF,"Notch Off"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
+    }
+  },
+  {
     MENU_FT8,
     "FT8 Options",
     7U,
@@ -286,7 +306,6 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_NONE,"None"}
     }
   },
-
   {
     MENU_CW_SPEED,
     "CW Speed",

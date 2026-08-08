@@ -4481,54 +4481,59 @@ namespace spectrum
     return scale;
   }
 
-  void process(int16_t ii[], int16_t qq[],uint8_t mag[],const int8_t gain)
+  static void process(int16_t ii[], int16_t qq[], uint8_t mag[], const int8_t gain, const uint32_t freq)
   {
     int16_t re[N_WAVE] = { 0 };
     int16_t im[N_WAVE] = { 0 };
 
-    // DC removal
-    // (get the average and subtract from all samples)
+    // DC estimate in Q16 fixed point:
+    // mean = sum / 1024, so
+    // Q16 mean = sum * 65536 / 1024 = sum * 64
     int32_t dc1 = 0;
     int32_t dc2 = 0;
-    for (int32_t i=0;i<N_WAVE;i++)
+    for (uint32_t i = 0; i < N_WAVE; i++)
     {
       dc1 += ii[i];
       dc2 += qq[i];
     }
-    dc1 >>= 10;
-    dc2 >>= 10;
+    const int32_t dcq1 = dc1 * 64;
+    const int32_t dcq2 = dc2 * 64;
 
-    // remove DC
+    // remove DC with error-feedback (fraction-saving) subtraction:
+    // the integer amounts subtracted average to the exact Q16 mean over
+    // the block, so the residual is an incoherent +/-1 LSB dither that
+    // disappears into the noise floor, instead of a constant sub-LSB
+    // offset that the FFT integrates coherently into the centre bin
+    int32_t acc1 = 0;
+    int32_t acc2 = 0;
     for (uint32_t i = 0; i < N_WAVE; i++)
     {
-      re[i] = ii[i] - (int16_t)dc1;
-      im[i] = qq[i] - (int16_t)dc2;
+      acc1 += dcq1;
+      acc2 += dcq2;
+      // integer part (arithmetic shift = floor)
+      const int32_t s1 = acc1 >> 16;
+      const int32_t s2 = acc2 >> 16;
+      // keep fractional remainder in [0, 65536)
+      acc1 &= 0xFFFF;
+      acc2 &= 0xFFFF;
+      re[i] = ii[i] - (int16_t)s1;
+      im[i] = qq[i] - (int16_t)s2;
     }
 
-    // Hann window
-    if (gain<0)
+    // Hann window with gain folded into a single rounded shift:
+    // (x * w) >> (15 - gain) is identical to the old pre-shift + (>> 15)
+    // for both signs of gain, but quantises once (rounded) instead of
+    // twice (floored), so the attenuation path no longer re-injects DC.
+    // Multiplying before shifting also removes the old value << gain,
+    // which could overflow int32 on large samples with high gain.
+    const int32_t shift = 15 - (int32_t)gain;
+    const int32_t rnd = (shift > 0) ? (1 << (shift - 1)) : 0;
+    for (uint32_t i = 0; i < N_WAVE; i++)
     {
-      for (uint32_t i = 0; i < N_WAVE; i++)
-      {
-        const int32_t value_re = (int32_t)re[i] >> (-gain);
-        const int32_t value_im = (int32_t)im[i] >> (-gain);
-        const int32_t w_re = value_re * (int32_t)window_hanning_1024[i];
-        const int32_t w_im = value_im * (int32_t)window_hanning_1024[i];
-        re[i] = (int16_t)(w_re >> 15);
-        im[i] = (int16_t)(w_im >> 15);
-      }
-    }
-    else
-    {
-      for (uint32_t i = 0; i < N_WAVE; i++)
-      {
-        const int32_t value_re = (int32_t)re[i] << gain;
-        const int32_t value_im = (int32_t)im[i] << gain;
-        const int32_t w_re = value_re * (int32_t)window_hanning_1024[i];
-        const int32_t w_im = value_im * (int32_t)window_hanning_1024[i];
-        re[i] = (int16_t)(w_re >> 15);
-        im[i] = (int16_t)(w_im >> 15);
-      }
+      const int32_t w_re = (int32_t)re[i] * (int32_t)window_hanning_1024[i];
+      const int32_t w_im = (int32_t)im[i] * (int32_t)window_hanning_1024[i];
+      re[i] = (int16_t)((w_re + rnd) >> shift);
+      im[i] = (int16_t)((w_im + rnd) >> shift);
     }
 
     // forward, complex FFT
@@ -4541,18 +4546,75 @@ namespace spectrum
       // magnitude estimate
       const uint32_t m = (uint32_t)abs(re[i]);
       const uint32_t n = (uint32_t)abs(im[i]);
-      magnitude[i] = ((15 * max(m, n))>>4) + ((15 * min(m, n)) >> 5);
+      magnitude[i] = ((15 * max(m, n)) >> 4) + ((15 * min(m, n)) >> 5);
     }
 
     // reverse the frequency bins so that they are in order
-    for (int32_t i=0,j=511;i<512;i++,j--)
+    for (int32_t i = 0, j = 511; i < 512; i++, j--)
     {
       mag[i] = log32(magnitude[j]);
     }
-    for (int32_t i=512,j=1023;i<1024;i++,j--)
+    for (int32_t i = 512, j = 1023; i < 1024; i++, j--)
     {
       mag[i] = log32(magnitude[j]);
     }
+
+#ifdef PEDESTAL_FILTER
+    if (freq > 15'000'000ul)
+    {
+      // adaptive pedestal baseline: no cal, no flash, self-adjusts
+      // after hardware changes and across gain settings
+      // display index 511 = bin 0 (DC), 512 = bin -1; pedestal spans ~+/-24 bins
+      static constexpr int32_t P_LO = 511 - 24;            // 487
+      static constexpr int32_t P_HI = 512 + 24;            // 536
+      static constexpr int32_t P_N  = P_HI - P_LO + 1;     // 50
+      static constexpr int32_t P_GUARD = 8;                // floor-estimate bins
+      // estimate the current local floor just outside the pedestal
+      uint32_t f = 0;
+      for (int32_t i = 1; i <= P_GUARD; i++)
+      {
+        f += mag[P_LO - i];
+        f += mag[P_HI + i];
+      }
+      const int32_t floor_now = (int32_t)(f / (2 * P_GUARD));
+      // per-bin baseline in Q4 (1/16 count): median tracker.
+      // steps toward each frame's value, so it converges on the median of
+      // the fluctuation rather than the fade floor, and moves smoothly
+      // instead of in synchronized whole-count ticks
+      static uint16_t base_q4[P_N];
+      static uint16_t base_fl_q4;
+      static int8_t   last_gain = 127;
+
+      if (gain != last_gain)                        // re-seed on gain change
+      {
+        last_gain = gain;
+        for (int32_t i = 0; i < P_N; i++)
+        {
+          base_q4[i] = (uint16_t)mag[P_LO + i] << 4;
+        }
+        base_fl_q4 = (uint16_t)floor_now << 4;
+      }
+
+      const int32_t fl_q4 = floor_now << 4;
+      if (fl_q4 > (int32_t)base_fl_q4)      base_fl_q4++;
+      else if (fl_q4 < (int32_t)base_fl_q4) base_fl_q4--;
+
+      for (int32_t i = 0; i < P_N; i++)
+      {
+        const int32_t m_q4 = (int32_t)mag[P_LO + i] << 4;
+        if (m_q4 > (int32_t)base_q4[i])      base_q4[i] += 3; // track 75th percentile
+        else if (m_q4 < (int32_t)base_q4[i]) base_q4[i]--;    // -1/16 count
+
+        int32_t ex = ((int32_t)base_q4[i] - (int32_t)base_fl_q4) >> 4;
+        ex = min(ex, (int32_t)15);
+        if (ex > 0)
+        {
+          mag[P_LO + i] = (uint8_t)max((int32_t)mag[P_LO + i] - ex, 0);
+        }
+      }
+    }
+#endif
+
   }
 }
 

@@ -1,5 +1,6 @@
 /*
- * MBPTRX Version 5.9.240
+ *
+ * MBPTRX Version 6.4.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -77,9 +78,18 @@
  *  5.7.240 FT8 fix frozen age colour
  *  5.8.240 FT8 detect poached QSO
  *  5.9.240 fix s-meter sensitivity
+ *  6.0.240 improved spectrum (pedestal)
+ *  6.1.240 improved CESSB
+ *  6.2.240 improved sensitivity (AGC)
+ *  6.3.240 core separate stacks
+ *  6.4.240 notch filter
  */
 
 //#define DEBUGGING_SKIP
+
+// enable to reduce the centre pedestal
+// or disable if not needed or wanted
+#define PEDESTAL_FILTER
 
 #include <SPI.h>
 #include <EEPROM.h>
@@ -112,7 +122,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V5.9."
+#define VERSION_STRING "  V6.4."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -139,6 +149,9 @@
 #define DEFAULT_MICGAIN 100ul
 #define DEFAULT_MICPROC 0ul
 #define DEFAULT_BANDWIDTH 3ul
+#define NOTCH_LOW 300ul
+#define NOTCH_HIGH 2600ul
+#define DEFAULT_NOTCH 1000ul
 #define BUTTON_LONG_PRESS_TIME 800ul
 #define TCXO_FREQ 27000021ul
 #define SPECTRUM_LEVEL_MIN -4
@@ -220,6 +233,8 @@
 #define POS_MULTIVALUE_Y   65
 #define POS_METER_X       100
 #define POS_METER_Y        25
+#define POS_NOTCH_X       181
+#define POS_NOTCH_Y        25
 #define POS_TUNING_STEP_X 130
 #define POS_TUNING_STEP_Y  40
 #define POS_SWR_X         125
@@ -317,6 +332,7 @@ volatile static struct
   uint32_t micgain;
   uint32_t micproc;
   uint32_t bandwidth;
+  uint32_t notch;
   radio_mode_t mode;
   ft8_call_t ft8_cq;
   bool tx_safe;
@@ -328,6 +344,7 @@ volatile static struct
   bool menu_active;
   bool mode_auto;
   bool graph_swr;
+  bool notch_enable;
   int8_t level[NUM_BANDS];
   int8_t slevel[NUM_BANDS];
 }
@@ -348,6 +365,7 @@ radio =
   DEFAULT_MICGAIN,
   DEFAULT_MICPROC,
   DEFAULT_BANDWIDTH,
+  DEFAULT_NOTCH,
   DEFAULT_MODE,
   FT8_CQ_CQ,
   false,
@@ -358,6 +376,7 @@ radio =
   true,
   false,
   true,
+  false,
   false,
   {0,0,0,0,0,0,0,0,0},
   {0,0,0,0,0,0,0,0,0}
@@ -405,6 +424,11 @@ volatile static struct
   uint32_t count;
 } cpu = {0,0};
 
+// For RP2040/RP2350 multicore: Allocates a dedicated 8KB stack for Core 1
+// By default, Core 0 and Core 1 split a single 8KB stack (4KB each)
+// Setting this to true prevents Core 1 from causing stack overflow crashes
+bool core1_separate_stack = true;
+
 Si5351 SI5351;
 MCP3021 fwdADC;
 MCP3021 refADC;
@@ -441,6 +465,7 @@ volatile static bool save_settings_now = false;
 volatile static bool setup_complete = false;
 volatile static bool set_spectrum_level = false;
 volatile static bool adj_spectrum_level = false;
+volatile static bool adj_notch_filter = false;
 volatile static bool vox_triggered = false;
 volatile static bool vox_mic_ready = false;
 volatile static char cw_decode_buf[32] = "";
@@ -896,6 +921,13 @@ void setup(void)
   restore_settings();
   set_filter();
 
+  // notch init and not enabled
+  // default frequency
+  // bandwidth and depth (dB)
+  DSP::notch.init(31250.0f);
+  DSP::notch.set((float)DEFAULT_NOTCH, 100.0f, 30.0f);
+  DSP::notch.enable(false);
+
 #ifdef DEBUG_LED
   pinMode(LED_BUILTIN,OUTPUT);
   for (int i=0;i<2;i++)
@@ -1320,6 +1352,21 @@ static void show_cpu_usage(void)
   }
 }
 
+static void show_notch(void)
+{
+  if (radio.tx_enable)
+  {
+    return;
+  }
+  if (radio.notch_enable)
+  {
+    lcd.drawRect(POS_NOTCH_X,POS_NOTCH_Y,12,11,LCD_RED);
+    lcd.setCursor(POS_NOTCH_X+3,POS_NOTCH_Y+2);
+    lcd.setTextSize(1);
+    lcd.print("T");
+  }
+}
+
 static void show_jnr(void)
 {
   if (radio.jnrlevel==0)
@@ -1370,6 +1417,7 @@ static void show_meter_dial(const uint8_t sig)
 
 static void show_cw_settings(void)
 {
+  // spectrum level is displayed here as well
   if (set_spectrum_level || adj_spectrum_level)
   {
     return;
@@ -1420,6 +1468,15 @@ static void show_cessb_settings(void)
     lcd.print("Spectrum Level: ");
     lcd.print(radio.level[radio.band]*6);
     lcd.print("dB");
+  }
+  else if (adj_notch_filter)
+  {
+    lcd.setTextSize(1);
+    lcd.setTextColor(LCD_GREEN);
+    lcd.setCursor(POS_CESSB_MIC_X,POS_CESSB_MIC_Y);
+    lcd.print("Notch: ");
+    lcd.print(radio.notch);
+    lcd.print("Hz");
   }
   else
   {
@@ -1525,7 +1582,6 @@ static void show_spectrum(void)
   lcd.print("-14KHz");
   lcd.setCursor(LCD_WIDTH-38,POS_WATER_Y+4);
   lcd.print("+14KHz");
-
   if (radio.tx_enable)
   {
     switch (radio.mode)
@@ -1831,6 +1887,7 @@ static void update_display(const uint32_t signal_level = 0u,const int32_t debug_
   show_rx_tx();
   show_mode();
   show_band();
+  show_notch();
   show_cpu_usage();
   show_frequency();
   show_tuning_step();
@@ -2275,7 +2332,7 @@ static void process_spectrum(void)
     data_re[i] = adc_data_i[i+offset];
     data_im[i] = adc_data_q[i+offset];
   }
-  spectrum::process(data_re,data_im,magnitude,gain);
+  spectrum::process(data_re,data_im,magnitude,gain,radio.frequency);
 }
 
 
@@ -4363,7 +4420,37 @@ static const bool do_ft8(const bool cal_reset = false)
     ft8_display(slot_calibrate_ms, ft8_state, prog);
   }
 
-  return true;  // stay in FT8 mode
+  // stay in FT8 mode
+  return true;
+}
+
+static void set_notch_filter(void)
+{
+  // rotary sets notch frequency
+  static uint32_t old_notch_frequency = radio.notch;
+  mutex_enter_blocking(&rotary_mutex);
+  const int32_t notch_delta = radio.tune;
+  radio.tune = 0;
+  mutex_exit(&rotary_mutex);
+  volatile int32_t f = (int32_t)radio.notch + notch_delta * 10; // 10 Hz per detent
+  f = constrain(f,NOTCH_LOW,NOTCH_HIGH);
+  radio.notch = f;
+  if (old_notch_frequency != f)
+  {
+    old_notch_frequency = f;
+    DSP::notch.set((float)f, 100.0f, 30.0f);
+  }
+  if (digitalRead(PIN_ENCBUT)==LOW)
+  {
+    // if button pressed, exit
+    delay(50);
+    while (digitalRead(PIN_ENCBUT)==LOW)
+    {
+      tight_loop_contents();
+    }
+    delay(50);
+    adj_notch_filter = false;
+  }
 }
 
 /*
@@ -4395,6 +4482,7 @@ void loop1(void)
   static int8_t old_level = 0;
   static bool old_cessb = radio.cessb;
   static bool old_graph_swr = radio.graph_swr;
+  static bool old_notch_enable = radio.notch_enable;
   static mode_t old_mode = radio.mode;
 
   // process button press
@@ -4443,6 +4531,8 @@ void loop1(void)
         case OPTION_BW_2400:         radio.bandwidth = 3ul;                          break;
         case OPTION_BW_2600:         radio.bandwidth = 4ul;                          break;
         case OPTION_BW_2800:         radio.bandwidth = 5ul;                          break;
+        case OPTION_NOTCH_ON:        radio.notch_enable = true;                      break;
+        case OPTION_NOTCH_OFF:       radio.notch_enable = false;                     break;
         case OPTION_SIDETONE_500:    radio.sidetone = 500u;                          break;
         case OPTION_SIDETONE_550:    radio.sidetone = 550u;                          break;
         case OPTION_SIDETONE_600:    radio.sidetone = 600u;                          break;
@@ -4515,6 +4605,22 @@ void loop1(void)
       {
         // only changing current level, not saving it
         old_level = radio.level[radio.band];
+      }
+
+      // notch enable/disable
+      if (old_notch_enable != radio.notch_enable)
+      {
+        if (radio.mode==MODE_LSB || radio.mode==MODE_USB)
+        {
+          old_notch_enable = radio.notch_enable;
+          adj_notch_filter = radio.notch_enable;
+          DSP::notch.enable(radio.notch_enable);
+        }
+        else
+        {
+          // maintain notch condition
+          radio.notch_enable = old_notch_enable;
+        }
       }
 
       // when settings change save them
@@ -4642,41 +4748,48 @@ void loop1(void)
     else
     {
       // menu not active
-      if (set_spectrum_level || adj_spectrum_level)
+      if (set_spectrum_level || adj_spectrum_level || adj_notch_filter)
       {
-        // rotary sets level
-        mutex_enter_blocking(&rotary_mutex);
-        const int32_t level_delta = radio.tune;
-        radio.tune = 0;
-        mutex_exit(&rotary_mutex);
-        int8_t new_level = radio.level[radio.band] + level_delta;
-        new_level = constrain(new_level,SPECTRUM_LEVEL_MIN,SPECTRUM_LEVEL_MAX);
-        radio.level[radio.band] = new_level;
-        if (digitalRead(PIN_ENCBUT)==LOW)
+        if (adj_notch_filter)
         {
-          // if button pressed
-          // save new level (if changed)
-          // wait for button release
-          if (set_spectrum_level && new_level!=old_level)
+          set_notch_filter();
+        }
+        else
+        {
+          // rotary sets level
+          mutex_enter_blocking(&rotary_mutex);
+          const int32_t level_delta = radio.tune;
+          radio.tune = 0;
+          mutex_exit(&rotary_mutex);
+          int8_t new_level = radio.level[radio.band] + level_delta;
+          new_level = constrain(new_level,SPECTRUM_LEVEL_MIN,SPECTRUM_LEVEL_MAX);
+          radio.level[radio.band] = new_level;
+          if (digitalRead(PIN_ENCBUT)==LOW)
           {
-            // remember saved level
-            radio.slevel[radio.band] = new_level;
-            save_settings_now = true;
-            while (save_settings_now)
+            // if button pressed
+            // save new level (if changed)
+            // wait for button release
+            if (set_spectrum_level && new_level!=old_level)
             {
-              // EEPROM will pause this core
-              // do nothing until saved
+              // remember saved level
+              radio.slevel[radio.band] = new_level;
+              save_settings_now = true;
+              while (save_settings_now)
+              {
+                // EEPROM will pause this core
+                // do nothing until saved
+                tight_loop_contents();
+              }
+            }
+            delay(50);
+            while (digitalRead(PIN_ENCBUT)==LOW)
+            {
               tight_loop_contents();
             }
+            delay(50);
+            set_spectrum_level = false;
+            adj_spectrum_level = false;
           }
-          delay(50);
-          while (digitalRead(PIN_ENCBUT)==LOW)
-          {
-            tight_loop_contents();
-          }
-          delay(50);
-          set_spectrum_level = false;
-          adj_spectrum_level = false;
         }
       }
       else
