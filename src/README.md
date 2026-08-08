@@ -60,3 +60,9 @@
  * 5.7.240 FT8 fix frozen age colour
  * 5.8.240 FT8 detect poached QSO
  * 5.9.240 fix s-meter sensitivity
+ * 6.0.240 improved spectrum (pedestal)
+ * 6.1.240 improved CESSB
+ * 6.2.240 improved sensitivity (AGC)
+ * 6.3.240 core separate stacks
+ * 6.4.240 notch filter
+
