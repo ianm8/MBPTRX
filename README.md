@@ -8,6 +8,7 @@ A software defined multi-band phasing transceiver.
  * 30 KHz spectrum display
  * Noise reduction
  * Noise blanker
+ * Notch filter
 
 Here is a block diagram:
 
