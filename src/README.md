@@ -65,4 +65,5 @@
  * 6.2.240 improved sensitivity (AGC)
  * 6.3.240 core separate stacks
  * 6.4.240 notch filter
-
+ * 6.5.240 reduce spectrum stack usage
+ * 6.6.240 fix SWR graph mode
