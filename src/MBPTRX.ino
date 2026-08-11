@@ -1,6 +1,6 @@
 /*
  *
- * MBPTRX Version 6.4.240
+ * MBPTRX Version 6.6.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -83,6 +83,8 @@
  *  6.2.240 improved sensitivity (AGC)
  *  6.3.240 core separate stacks
  *  6.4.240 notch filter
+ *  6.5.240 reduce spectrum stack usage
+ *  6.6.240 fix SWR graph mode
  */
 
 //#define DEBUGGING_SKIP
@@ -122,7 +124,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V6.4."
+#define VERSION_STRING "  V6.6."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -1102,6 +1104,64 @@ static void show_tuning_step(void)
   lcd.print(radio.step);
 }
 
+// ---------------------------------------------------------------------------
+// Non-linear meter scale, shared by the PO and SWR bargraphs.
+// Knot values are in hundredths (100 = 1.0), positions are per-mille of the
+// bar (1000 = full scale). Bottom of the range is expanded so that 1.0..3.0
+// occupies the first ~55% of the bar. Retune here only; nothing else changes.
+// ---------------------------------------------------------------------------
+#define METER_SEGMENTS   16u
+#define METER_PITCH       5u
+#define METER_BLOCK       4u
+#define METER_BAR_WIDTH  (METER_SEGMENTS*METER_PITCH) // 90 px max
+#define METER_PO_FS      1000u                        // 10.0 W full scale
+
+struct meter_knot_t { uint16_t value; uint16_t pos; };
+static const meter_knot_t METER_SCALE[] =
+{
+  {    0u,    0u },
+  {  100u,   60u },
+  {  200u,  320u },
+  {  300u,  550u },
+  {  500u,  760u },
+  {  700u,  890u },
+  { 1000u, 1000u }
+};
+static const uint8_t METER_KNOTS = sizeof(METER_SCALE)/sizeof(METER_SCALE[0]);
+struct meter_label_t { uint16_t value; const char *text; };
+static const meter_label_t METER_LABELS[] =
+{
+  {  100u, "1"  },
+  {  200u, "2"  },
+  {  300u, "3"  },
+  {  500u, "5"  },
+  { 1000u, "10" }
+};
+static const uint8_t METER_LABEL_COUNT = sizeof(METER_LABELS)/sizeof(METER_LABELS[0]);
+
+// value in hundredths -> number of lit blocks (0..METER_SEGMENTS)
+static uint8_t meter_blocks(uint32_t value)
+{
+  uint32_t pos = 1000ul;
+  if (value<=(uint32_t)METER_SCALE[0].value)
+  {
+    pos = METER_SCALE[0].pos;
+  }
+  else for (uint8_t i=1u;i<METER_KNOTS;i++)
+  {
+    if (value<(uint32_t)METER_SCALE[i].value)
+    {
+      const uint32_t v0 = METER_SCALE[i-1u].value;
+      const uint32_t p0 = METER_SCALE[i-1u].pos;
+      const uint32_t v1 = METER_SCALE[i].value;
+      const uint32_t p1 = METER_SCALE[i].pos;
+      pos = p0 + ((value-v0)*(p1-p0))/(v1-v0);
+      break;
+    }
+  }
+  return (uint8_t)((pos*METER_SEGMENTS + 500ul)/1000ul);
+}
+
 static void show_swr(void)
 {
   static const uint32_t PO_DECAY_RATE = 250ul;
@@ -1154,17 +1214,31 @@ static void show_swr(void)
   // show power and SWR
   if (radio.graph_swr)
   {
-    // graph power
-    const uint8_t p = max_po / 10u;
-    for (uint8_t i=0;i<p;i++)
+    // scale labels, positioned from the same warp as the bars
+    lcd.setTextSize(1);
+    lcd.setTextColor(LCD_WHITE,LCD_BLACK);
+    for (uint8_t i=0u;i<METER_LABEL_COUNT;i++)
     {
-      lcd.fillRect(POS_METER_X+i*5+0,POS_METER_Y+14,4,4,LCD_WHITE);
+      const int16_t tick = (int16_t)(meter_blocks(METER_LABELS[i].value)*METER_PITCH);
+      const int16_t w = (int16_t)(strlen(METER_LABELS[i].text)*6u - 1u);
+      int16_t x = tick - w/2;
+      if (x<0) x = 0;
+      if (x+w > (int16_t)METER_BAR_WIDTH) x = (int16_t)METER_BAR_WIDTH - w;
+      lcd.setCursor(POS_METER_X+x,POS_METER_Y+2);
+      lcd.print(METER_LABELS[i].text);
     }
-    // graph SWR
-    const uint8_t s = vswr / 100u;
-    for (uint8_t i=0;i<s;i++)
+    // graph power (max_po is in 0.1W, so x10 gives hundredths)
+    const uint8_t p = meter_blocks(min(max_po*10ul,(uint32_t)METER_PO_FS));
+    for (uint8_t i=0u;i<p;i++)
     {
-      lcd.fillRect(POS_METER_X+i*5+0,POS_METER_Y+20,4,4,LCD_WHITE);
+      lcd.fillRect(POS_METER_X+i*METER_PITCH,POS_METER_Y+14,METER_BLOCK,METER_BLOCK,LCD_WHITE);
+    }
+    // graph SWR (vswr is already in hundredths)
+    const uint8_t s = meter_blocks(vswr);
+    for (uint8_t i=0u;i<s;i++)
+    {
+      const uint32_t c = i>3u?LCD_RED:LCD_WHITE;
+      lcd.fillRect(POS_METER_X+i*METER_PITCH,POS_METER_Y+20,METER_BLOCK,METER_BLOCK,c);
     }
   }
   else

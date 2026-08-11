@@ -4481,10 +4481,19 @@ namespace spectrum
     return scale;
   }
 
+  static inline uint32_t get_mag(const int16_t r, const int16_t i)
+  {
+    const uint32_t m = (uint32_t)abs((int32_t)r);
+    const uint32_t n = (uint32_t)abs((int32_t)i);
+    const uint32_t hi = (m > n) ? m : n;
+    const uint32_t lo = (m > n) ? n : m;
+    return ((15u * hi) >> 4) + ((15u * lo) >> 5);
+  }
+
   static void process(int16_t ii[], int16_t qq[], uint8_t mag[], const int8_t gain, const uint32_t freq)
   {
-    int16_t re[N_WAVE] = { 0 };
-    int16_t im[N_WAVE] = { 0 };
+    static int16_t re[N_WAVE] = { 0 };
+    static int16_t im[N_WAVE] = { 0 };
 
     // DC estimate in Q16 fixed point:
     // mean = sum / 1024, so
@@ -4539,24 +4548,15 @@ namespace spectrum
     // forward, complex FFT
     fix_fft(re, im, LOG2_N_WAVE);
 
-    // magnitude estimate
-    uint32_t magnitude[N_WAVE] = {0};
-    for (uint32_t i = 0; i < N_WAVE; i++)
-    {
-      // magnitude estimate
-      const uint32_t m = (uint32_t)abs(re[i]);
-      const uint32_t n = (uint32_t)abs(im[i]);
-      magnitude[i] = ((15 * max(m, n)) >> 4) + ((15 * min(m, n)) >> 5);
-    }
-
-    // reverse the frequency bins so that they are in order
+    // magnitude, log, and reverse the frequency bins
+    // so that they are in order
     for (int32_t i = 0, j = 511; i < 512; i++, j--)
     {
-      mag[i] = log32(magnitude[j]);
+      mag[i] = log32(get_mag(re[j], im[j]));
     }
     for (int32_t i = 512, j = 1023; i < 1024; i++, j--)
     {
-      mag[i] = log32(magnitude[j]);
+      mag[i] = log32(get_mag(re[j], im[j]));
     }
 
 #ifdef PEDESTAL_FILTER
@@ -4602,7 +4602,7 @@ namespace spectrum
       for (int32_t i = 0; i < P_N; i++)
       {
         const int32_t m_q4 = (int32_t)mag[P_LO + i] << 4;
-        if (m_q4 > (int32_t)base_q4[i])      base_q4[i] += 3; // track 75th percentile
+        if (m_q4 > (int32_t)base_q4[i]) base_q4[i] += 3; // track 75th percentile
         else if (m_q4 < (int32_t)base_q4[i]) base_q4[i]--;    // -1/16 count
 
         int32_t ex = ((int32_t)base_q4[i] - (int32_t)base_fl_q4) >> 4;
