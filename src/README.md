@@ -67,3 +67,4 @@
  * 6.4.240 notch filter
  * 6.5.240 reduce spectrum stack usage
  * 6.6.240 fix SWR graph mode
+ * 6.7.240 fix frequency step
