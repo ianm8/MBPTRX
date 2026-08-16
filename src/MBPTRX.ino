@@ -1,6 +1,6 @@
 /*
  *
- * MBPTRX Version 6.6.240
+ * MBPTRX Version 6.7.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -85,6 +85,7 @@
  *  6.4.240 notch filter
  *  6.5.240 reduce spectrum stack usage
  *  6.6.240 fix SWR graph mode
+ *  6.7.240 fix frequency step
  */
 
 //#define DEBUGGING_SKIP
@@ -124,7 +125,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V6.6."
+#define VERSION_STRING "  V6.7."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -4940,11 +4941,14 @@ void loop1(void)
         const int32_t tuning_delta = radio.tune;
         radio.tune = 0;
         mutex_exit(&rotary_mutex);
-        uint32_t new_frequency = radio.frequency;
-        new_frequency = new_frequency+(tuning_delta * (int32_t)radio.step);
-        new_frequency = new_frequency/radio.step;
-        new_frequency = new_frequency*radio.step;
-        new_frequency = constrain(new_frequency,bands[radio.band].lo,bands[radio.band].hi);
+        volatile uint32_t new_frequency = radio.frequency;
+        if (tuning_delta != 0)
+        {
+          const uint32_t step_modifer = (tuning_delta>0)?new_frequency:(new_frequency+radio.step-1);
+          new_frequency = (step_modifer / radio.step) * radio.step;
+          new_frequency += tuning_delta * radio.step;
+          new_frequency = constrain(new_frequency,bands[radio.band].lo,bands[radio.band].hi);
+        }
         if (new_frequency!=old_frequency || radio.mode!=old_mode)
         {
           radio.frequency = new_frequency;
