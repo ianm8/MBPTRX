@@ -1,6 +1,6 @@
 /*
  *
- * MBPTRX Version 6.7.240
+ * MBPTRX Version 6.8.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -86,6 +86,7 @@
  *  6.5.240 reduce spectrum stack usage
  *  6.6.240 fix SWR graph mode
  *  6.7.240 fix frequency step
+ *  6.8.240 move DSP to core1
  */
 
 //#define DEBUGGING_SKIP
@@ -125,7 +126,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V6.7."
+#define VERSION_STRING "  V6.8."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -464,7 +465,6 @@ volatile static float ft8_data[FT8_FFT_SIZE] = {0.0f};
 volatile static float mic_gain = 0.0f;
 volatile static bool dit_latched = false;
 volatile static bool dah_latched = false;
-volatile static bool save_settings_now = false;
 volatile static bool setup_complete = false;
 volatile static bool set_spectrum_level = false;
 volatile static bool adj_spectrum_level = false;
@@ -1012,7 +1012,7 @@ void setup(void)
 
 void setup1(void)
 {
-  // run UI on core 1
+  // run DSP on core 1
   // only go to loop1 when setup() has completed
   while (!setup_complete)
   {
@@ -2131,9 +2131,9 @@ static const option_value_t process_menu(void)
   return option;
 }
 
-void __not_in_flash_func(loop)(void)
+void __not_in_flash_func(loop1)(void)
 {
-  // run DSP on core 0
+  // run DSP on core 1
   static bool tx = false;
   static uint32_t tx_peak_delay = 0;
   static float tx_level = 100.0f;
@@ -2366,11 +2366,6 @@ void __not_in_flash_func(loop)(void)
             rotary = 0;
             mutex_exit(&rotary_mutex);
           }
-        }
-        if (save_settings_now)
-        {
-          save_settings();
-          save_settings_now = false;
         }
         volatile const uint32_t cpu_end = time_us_32();
         cpu.usage += (cpu_end-cpu_start);
@@ -4075,7 +4070,7 @@ static void ft8_init(void)
 
 //------------------------------------------------------------------------------
 // MAIN FT8 FUNCTION
-// Called from loop1() on core 1 while radio.mode == MODE_FT8
+// Called from loop() on core 0 while radio.mode == MODE_FT8
 // Returns false to exit FT8 mode
 //------------------------------------------------------------------------------
 static const bool do_ft8(const bool cal_reset = false)
@@ -4531,9 +4526,9 @@ static void set_notch_filter(void)
 /*
  * general UI processing
  */
-void loop1(void)
+void loop(void)
 {
-  // run UI on core 1
+  // run UI on core 0
   if (radio.mode == MODE_FT8)
   {
     // keep FT8 completely separate
@@ -4768,13 +4763,7 @@ void loop1(void)
       // save the settings
       if (settings_changed)
       {
-        save_settings_now = true;
-        while (save_settings_now)
-        {
-          // EEPROM will pause this core
-          // do nothing until saved
-          tight_loop_contents();
-        }
+        save_settings();
       }
 
       // mode may change in auto
@@ -4848,13 +4837,7 @@ void loop1(void)
             {
               // remember saved level
               radio.slevel[radio.band] = new_level;
-              save_settings_now = true;
-              while (save_settings_now)
-              {
-                // EEPROM will pause this core
-                // do nothing until saved
-                tight_loop_contents();
-              }
+              save_settings();
             }
             delay(50);
             while (digitalRead(PIN_ENCBUT)==LOW)
