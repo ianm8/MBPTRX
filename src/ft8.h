@@ -336,6 +336,7 @@ static void ft8_hashtable_cleanup(uint8_t max_age)
 
 static void ft8_hashtable_add(const char* callsign, uint32_t hash)
 {
+  uint32_t probes = 0;
   uint16_t hash10 = (hash >> 12) & 0x3FFu;
   uint32_t idx = (hash10 * 23) % CALLSIGN_HASHTABLE_SIZE;
   while (callsign_hashtable[idx].callsign[0] != '\0')
@@ -349,6 +350,7 @@ static void ft8_hashtable_add(const char* callsign, uint32_t hash)
     }
     LOG(LOG_DEBUG, "Hash table clash!\n");
     idx = (idx + 1) % CALLSIGN_HASHTABLE_SIZE;
+    if (++probes >= CALLSIGN_HASHTABLE_SIZE) return;
   }
   callsign_hashtable_size++;
   strncpy(callsign_hashtable[idx].callsign, callsign, 11);
@@ -358,6 +360,7 @@ static void ft8_hashtable_add(const char* callsign, uint32_t hash)
 
 static const bool ft8_hashtable_lookup(ftx_callsign_hash_type_t hash_type, uint32_t hash, char* callsign)
 {
+  uint32_t probes = 0;
   uint8_t  shift = (hash_type == FTX_CALLSIGN_HASH_10_BITS) ? 12
     : (hash_type == FTX_CALLSIGN_HASH_12_BITS) ? 10 : 0;
   uint16_t hash10 = (hash >> (12 - shift)) & 0x3FFu;
@@ -370,6 +373,7 @@ static const bool ft8_hashtable_lookup(ftx_callsign_hash_type_t hash_type, uint3
       return true;
     }
     idx = (idx + 1) % CALLSIGN_HASHTABLE_SIZE;
+    if (++probes >= CALLSIGN_HASHTABLE_SIZE) break;
   }
   callsign[0] = '\0';
   return false;

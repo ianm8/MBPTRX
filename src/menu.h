@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 19U
+#define NUM_MENU_ITEMS 20U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -55,6 +55,7 @@ enum menu_top_t
   MENU_GRAPH_SWR,
   MENU_GAUSSIAN,
   MENU_FT8,
+  MENU_CALLSIGN,
   MENU_EXIT
 };
 
@@ -151,6 +152,8 @@ enum option_value_t
   OPTION_FT8_CQ_POTA,
   OPTION_FT8_CQ_SOTA,
   OPTION_FT8_CALSET,
+  OPTION_CALL_RESET,
+  OPTION_CALL_REBOOT,
   OPTION_NONE,
   OPTION_EXIT
 };
@@ -465,6 +468,23 @@ menu_options[NUM_MENU_ITEMS] =
     {
       {OPTION_GAUSSIAN_ON,"On"},
       {OPTION_GAUSSIAN_OFF,"Off"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
+    }
+  },
+  {
+    MENU_CALLSIGN,
+    "Callsign",
+    3U,
+    {
+      {OPTION_CALL_RESET,"Clear"},
+      {OPTION_CALL_REBOOT,"..Reboot"},
       {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},

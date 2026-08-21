@@ -53,6 +53,7 @@
 #define FT8_SWR_Y       3
 #define FT8_PWR_X       13
 #define FT8_PWR_Y       13
+#define FT8_AGC_Y       25
 
 #define FT8_AGED_COLOUR (lcd.color565(180, 180, 180))
 

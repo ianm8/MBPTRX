@@ -40,7 +40,7 @@ const unsigned char ttable[6][4] = {
   {R_START_M,            R_CCW_BEGIN_M,  R_START_M,    R_START | DIR_CCW},
 };
 #else
-#err got here full-step
+//#err got here full-step
 // Use the full-step state table (emits a code at 00 only)
 #define R_CW_FINAL 0x1
 #define R_CW_BEGIN 0x2
