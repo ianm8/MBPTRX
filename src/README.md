@@ -69,3 +69,10 @@
  * 6.6.240 fix SWR graph mode
  * 6.7.240 fix frequency step
  * 6.8.240 move DSP to core1
+ * 6.9.240 add popups
+ * 7.0.240 user set callsign
+ * 7.1.240 FT8 AGC display
+ * 7.2.240 cw.h -> CW.h
+ * 7.3.240 remove rotary err catch
+ * 7.4.240 FT8 hashtable bounds
+ * 7.5.240 ADC interrupt core1
