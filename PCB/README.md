@@ -1,7 +1,7 @@
 # BOM Notes
 
 ## Resistors
-All SM resistors are 1206 thick film of at least 125mW except R77 which should be at least 500mW.
+All SM resistors are 1206 thick film of at least 250mW except R77 which should be at least 500mW.
 
 ## Capacitors
 All SM capacitors are 1206 NP0 or C0G except for the 22uF (25V) and 100uF (6.3V or 10V) (X5R) capacitors.
