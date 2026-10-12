@@ -9,6 +9,9 @@ All SM capacitors are 1206 NP0 or C0G except for the 22uF (25V) and 100uF (6.3V 
 ## Inductors
 All SM inductors are 1206 for as high SRF as possible (ie, greater than 30MHz), except for L23 which has a specific part number.
 
+## T4 and T5
+T4 and T5 are listed as SHO-301 which is now obsolete. Instead use two FT50-43 toroids with 6 bifilar turns of 0.63mm ECW.
+
 # Build notes
 The MMG3H21NT1 is now obsolete but you can use a GVA-84+ from Mini Circuits.
 
