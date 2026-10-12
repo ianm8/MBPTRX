@@ -15,6 +15,9 @@ T4 and T5 are listed as SHO-301 which is now obsolete. Instead use two FT50-43 t
 # Build notes
 The MMG3H21NT1 is now obsolete but you can use a GVA-84+ from Mini Circuits.
 
+# Case
+A suitable case is Hammond part 1455P1601BK from Mouser 546-1455P1601BK.
+
 # PA Bias Adjustment
 1. Make sure you have a dummy load connected
 2. Set the bias trimpots to mid position
