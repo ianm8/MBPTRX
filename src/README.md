@@ -76,3 +76,12 @@
  * 7.3.240 remove rotary err catch
  * 7.4.240 FT8 hashtable bounds
  * 7.5.240 ADC interrupt core1
+ * 7.6.240 enforce build options
+ * 7.7.240 improve all-pass accuracy
+ * 7.8.240 improve noise blanker
+ * 7.9.240 improve spectrum gain
+ * 8.0.240 improve CW shaping
+ * 8.1.240 FT8 auto-calibrate
+ * 8.2.240 move mode auto
+ * 8.3.240 add 10000 to quick step
+ * 8.4.240 fix I2S backlog issue
