@@ -1,21 +1,20 @@
 /*
  *
- * MBPTRX Version 7.5.240
+ * MBPTRX Version 8.4.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
  *   (unless otherwise indicated)
  *
  * Libraries
- *
- *  https://github.com/Bodmer/TFT_eSPI
+ *  TFT_eSPI2 in TFF_ePSI2 folder (based on https://github.com/Bodmer/TFT_eSPI)
  *
  * Filter Design
  *
  *  https://www.arc.id.au/FilterDesign.html
  *
  * Important:
- *   Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI whenever the TFT_eSPI library is installed
+ *   Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI2 whenever the TFT_eSPI2 library is installed
  *   Important Note, there is a bug in version that requires the following change in TFT_eSPI_RP2040.h:
  *
  *     #define SET_BUS_READ_MODE  // spi_set_format(SPI_X,  8, (spi_cpol_t)0, (spi_cpha_t)0, SPI_MSB_FIRST)
@@ -94,9 +93,19 @@
  *  7.3.240 remove rotary err catch
  *  7.4.240 FT8 hashtable bounds
  *  7.5.240 ADC interrupt core1
+ *  7.6.240 enforce build options
+ *  7.7.240 improve all-pass accuracy
+ *  7.8.240 improve noise blanker
+ *  7.9.240 improve spectrum gain
+ *  8.0.240 improve CW shaping
+ *  8.1.240 FT8 auto-calibrate
+ *  8.2.240 move mode auto
+ *  8.3.240 add 10000 to quick step
+ *  8.4.240 fix I2S backlog issue
  */
 
 //#define DEBUGGING_SKIP
+//#define DEBUG_I2S_BACKLOG
 
 // enable to reduce the centre pedestal
 // or disable if not needed or wanted
@@ -125,11 +134,28 @@
 #include "ArialBold14pt7b.h"
 #include "ArialBold16pt7b.h"
 
+// catch build options where possible
+#ifndef ARDUINO_RASPBERRY_PI_PICO_2
+#error "Tools > Board must be set to 'Raspberry Pi Pico 2'"
+#endif
+#if !defined(__OPTIMIZE__) || defined(__OPTIMIZE_SIZE__) || defined(__NO_INLINE__)
+#error "Self-test 1: set Tools > Optimize to -O3 (core 1 timing depends on it)"
+#endif
+#if defined(F_CPU) && (F_CPU != 240000000L)
+#error "Self-test 1: set Tools > CPU Speed to 240 MHz"
+#endif
+#ifndef NO_USB
+#error "Tools > USB Stack must be set to 'No USB'"
+#endif
+#ifdef USE_TINYUSB
+#error "Tools > USB Stack must be set to 'No USB' (TinyUSB selected)"
+#endif
+
 #if SI5351_PLL_VCO_MIN != 440000000
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V7.5."
+#define VERSION_STRING "  V8.4."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -232,8 +258,10 @@
 #define POS_CPU_Y          30
 #define POS_JNR_X         199
 #define POS_JNR_Y          52
-#define POS_DEBUG_X        20
-#define POS_DEBUG_Y       120
+#define POS_DEBUG1_X       10
+#define POS_DEBUG1_Y      100
+#define POS_DEBUG2_X      180
+#define POS_DEBUG2_Y      100
 #define POS_ATT_X         190
 #define POS_ATT_Y          30
 #define POS_MULTI_X        55
@@ -354,6 +382,7 @@ volatile static struct
   bool mode_auto;
   bool graph_swr;
   bool notch_enable;
+  bool ft8_autocal;
   int8_t level[NUM_BANDS];
   int8_t slevel[NUM_BANDS];
   char callsign[16];
@@ -389,6 +418,7 @@ radio =
   true,
   false,
   false,
+  true,
   {0,0,0,0,0,0,0,0,0},
   {0,0,0,0,0,0,0,0,0},
   "",
@@ -454,6 +484,8 @@ I2S i2s(INPUT);
 
 auto_init_mutex(rotary_mutex);
 auto_init_mutex(cw_decode_mutex);
+volatile static int32_t debug_value_1 = 0;
+volatile static int32_t debug_value_2 = 0;
 volatile static uint32_t audio_pwm = 0;
 volatile static uint32_t tx_i_pwm = 0;
 volatile static uint32_t tx_q_pwm = 0;
@@ -686,7 +718,6 @@ static void save_settings(void)
   static const uint32_t key = 0x12345678ul;
   mute();
   delay(100);
-  i2s.end();
   EEPROM.begin(256);
   uint32_t i = 0;
   EEPROM.put(i,key);
@@ -720,7 +751,7 @@ static void save_settings(void)
   i += sizeof(radio.callsign);
   EEPROM.put(i,radio.grid);
   EEPROM.end();
-  init_i2s();
+  delay(50);
   unmute();
 }
 
@@ -1556,16 +1587,22 @@ static void show_jnr(void)
   }
 }
 
-static void show_debug_value(const int32_t v)
+static void show_debug_value(const int32_t v1,const int32_t v2 = 0)
 {
-  if (v==0)
+  if (v1 != 0)
   {
-    return;
+    lcd.setTextSize(2);
+    lcd.setTextColor(LCD_WHITE);
+    lcd.setCursor(POS_DEBUG1_X,POS_DEBUG1_Y);
+    lcd.print(v1);
   }
-  lcd.setTextSize(2);
-  lcd.setTextColor(LCD_WHITE);
-  lcd.setCursor(POS_DEBUG_X,POS_DEBUG_Y);
-  lcd.print(v);
+  if (v2 != 0)
+  {
+    lcd.setTextSize(2);
+    lcd.setTextColor(LCD_WHITE);
+    lcd.setCursor(POS_DEBUG2_X,POS_DEBUG2_Y);
+    lcd.print(v2);
+  }
 }
 
 static void show_meter_dial(const uint8_t sig)
@@ -2052,16 +2089,31 @@ static void show_menu(void)
 }
 
 static char sz_popup[64] = "";
+static char sz_popup_heading[64] = "";
 static uint32_t popup_timeout = 0;
 
-static void set_popup(const char *sz_message)
+static void set_popup(const char *sz_message,const char *sz_heading = NULL)
 {
   if (sz_message)
   {
     memset(sz_popup,0,sizeof(sz_popup));
+    memset(sz_popup_heading,0,sizeof(sz_popup_heading));
     strncpy(sz_popup,sz_message,sizeof(sz_popup)-1);
+    if (sz_heading)
+    {
+      strncpy(sz_popup_heading,sz_heading,sizeof(sz_popup_heading)-1);
+    }
+    else
+    {
+      strcpy(sz_popup_heading,"ATTENTION:");
+    }
     popup_timeout = millis() + POPUP_TIMEOUT;
   }
+}
+
+static void set_popup(volatile char *sz_message,const char *sz_heading = NULL)
+{
+  set_popup((const char*)sz_message,sz_heading);
 }
 
 static void show_popup(void)
@@ -2079,7 +2131,7 @@ static void show_popup(void)
   lcd.setTextSize(1);
   lcd.setTextColor(LCD_YELLOW, LCD_DARKRED);
   lcd.setCursor(16, 52);
-  lcd.print("ATTENTION:");
+  lcd.print(sz_popup_heading);
   lcd.setTextSize(2);
   lcd.setTextColor(LCD_WHITE, LCD_DARKRED);
   lcd.setCursor(16, 64);
@@ -2088,7 +2140,7 @@ static void show_popup(void)
   lcd.setTextSize(1);
 }
 
-static void update_display(const uint32_t signal_level = 0u,const int32_t debug_value = 0)
+static void update_display(const uint32_t signal_level = 0u)
 {
   display_clear();
   show_rx_tx();
@@ -2107,7 +2159,7 @@ static void update_display(const uint32_t signal_level = 0u,const int32_t debug_
   show_cw_decode();
   show_menu();
   show_popup();
-  show_debug_value(debug_value);
+  show_debug_value(debug_value_1,debug_value_2);
   display_refresh();
 }
 
@@ -2394,6 +2446,46 @@ void __not_in_flash_func(loop1)(void)
         {
           vox_triggered = true;
         }
+        // keep the I2S backlog centred
+        // 4 buffers x 256 words: 1024 bytes per buffer, 8 bytes per frame
+        // after a buffer lands the backlog should be ~1.5 buffers
+        // any excess is left over from a stall (boot, TX, flash write)
+        static constexpr int I2S_FRAME_BYTES = 8;
+        static constexpr int I2S_TRIM_HIGH = 1600;
+        static constexpr int I2S_TRIM_TARGET = 1536;
+        int backlog = i2s.available();
+#ifdef DEBUG_I2S_BACKLOG
+        volatile static uint32_t i2s_overruns = 0;
+        volatile static uint32_t i2s_backlog_max = 0;
+        // peak backlog (before trimming) over each 50ms window
+        if ((uint32_t)backlog>i2s_backlog_max)
+        {
+          i2s_backlog_max = (uint32_t)backlog;
+        }
+        const uint32_t now_us = time_us_32();
+        if (now_us-i2s_backlog_window>=50000ul)
+        {
+          i2s_backlog_window = now_us;
+          debug_value_1 = i2s_backlog_max;
+          i2s_backlog_max = 0;
+        }
+        if (i2s.getOverUnderflow())
+        {
+          i2s_overruns++;
+        }
+        debug_value_2 = i2s_overruns;
+#endif
+        // discard any excess
+        if (backlog>I2S_TRIM_HIGH)
+        {
+          while (backlog>I2S_TRIM_TARGET)
+          {
+            int32_t drop_i = 0;
+            int32_t drop_q = 0;
+            i2s.read32(&drop_i,&drop_q);
+            backlog -= I2S_FRAME_BYTES;
+          }
+        }
         if (i2s.available())
         {
           int32_t ii = 0;
@@ -2526,10 +2618,11 @@ static void process_spectrum(void)
   {
     return;
   }
+  static constexpr int8_t fcomp = 2;
   static int16_t data_re[SPECTRUM_BUFFER] = {0};
   static int16_t data_im[SPECTRUM_BUFFER] = {0};
   const int8_t ga = (radio.mode==MODE_DGL || radio.mode==MODE_DGU)?-3:0;
-  const int8_t gain = radio.tx_enable?ga:radio.level[radio.band];
+  const int8_t gain = radio.tx_enable?ga:radio.level[radio.band]+fcomp;
   for (uint32_t i=0;i<SPECTRUM_BUFFER;i++)
   {
     data_re[i] = adc_data_i[i+offset];
@@ -2787,6 +2880,9 @@ static ft8_cq_t ft8_cq = { 0 };
 // record button during decode callback
 static ft8_btn_t ft8_button_deferred = FT8_BTN_IDLE;
 static uint32_t ft8_button_down_time = 0;
+
+// auto calibrate
+static uint32_t ft8_cal_try = 0;
 
 //------------------------------------------------------------------------------
 // FT8 DISPLAY FUNCTIONS
@@ -4194,6 +4290,58 @@ static bool ft8_qso_detect_poach(
   return true;
 }
 
+// Call once per slot from the end of FT8_STATE_DECODING.
+// Updates slot_calibrate_ms in place.
+static const ft8_cal_result_t ft8_auto_calibrate(
+  const uint32_t n,
+  char lines[][FTX_MAX_DISPLAY_LENGTH],
+  uint32_t &cal_ms)
+{
+  static float dts[FT8_MAX_DECODED] = {0.0f};
+  char buf[24];
+
+  memset(dts,0,sizeof(dts));
+  if (n > 0u)
+  {
+    uint32_t m = 0u;
+    for (uint32_t i = 0u; i < n; i++)
+    {
+      float snr = 0.0f, dt = 0.0f, freq = 0.0f;
+      char msg[FTX_MAX_MESSAGE_LENGTH] = "";
+      if (sscanf(lines[i], "%f %f %f %34[^\n]", &snr, &dt, &freq, msg) == 4)
+      {
+        dts[m++] = dt;
+      }
+    }
+    if (m > 0u)
+    {
+      // median - insertion sort, m is small
+      for (uint32_t i = 1u; i < m; i++)
+      {
+        const float v = dts[i];
+        int32_t j = (int32_t)i - 1;
+        while (j >= 0 && dts[j] > v) { dts[j+1] = dts[j]; j--; }
+        dts[j+1] = v;
+      }
+      const float median = (m & 1u) ? dts[m/2u] : (dts[m/2u - 1u] + dts[m/2u]) * 0.5f;
+      cal_ms = (uint32_t)((int32_t)cal_ms + (int32_t)(median * 1000.0f));
+      snprintf(buf, sizeof(buf), "Locked %+.2fs", median);
+      ft8_set_popup(buf,"FT8 AUTOCAL:");
+      return FT8_CAL_DONE;
+    }
+  }
+  if (++ft8_cal_try >= FT8_CAL_MAX_TRIES)
+  {
+    ft8_set_popup("No signals found","FT8 AUTOCAL:");
+    return FT8_CAL_NOSIGNAL;
+  }
+
+  cal_ms += FT8_CAL_STEP_MS;
+  snprintf(buf, sizeof(buf), "Searching %lu/%u", ft8_cal_try + 1ul, FT8_CAL_MAX_TRIES);
+  ft8_set_popup(buf,"FT8 AUTOCAL:");
+  return FT8_CAL_WORKING;
+}
+
 //------------------------------------------------------------------------------
 // ft8_qso_abort()
 // Clean abort — returns to history browse, stays in FT8 mode.
@@ -4222,6 +4370,7 @@ static void ft8_init(void)
   ft8_exit_pending_until = 0;
   ft8_button_deferred = FT8_BTN_IDLE;
   ft8_button_down_time = 0;
+  ft8_cal_try = 0;
 }
 
 //------------------------------------------------------------------------------
@@ -4240,7 +4389,7 @@ static const bool do_ft8(const bool cal_reset = false)
   // make sure call and grid are set
   if (!check_station_details())
   {
-    set_popup("No callsign");
+    set_popup("No callsign","ERROR:");
     return false;
   }
 
@@ -4248,7 +4397,7 @@ static const bool do_ft8(const bool cal_reset = false)
   if (cal_reset)
   {
     slot_calibrate_ms = 0;
-    set_popup("Calibration Reset");
+    set_popup("Calibration Reset","FT8 INFO:");
     return false;
   }
 
@@ -4258,31 +4407,47 @@ static const bool do_ft8(const bool cal_reset = false)
   //--------------------------------------------------------------------------
   if (slot_calibrate_ms == 0)
   {
-    delay(50);
-    // wait for release
-    while (digitalRead(PIN_ENCBUT) == LOW)
-      delay(50);
-
-    uint32_t cal_progress = 0;
-    uint32_t disp_update  = 0;
-    const uint32_t cal_start = millis();
-    while (digitalRead(PIN_ENCBUT) == HIGH)
+    if (radio.ft8_autocal)
     {
-      const uint32_t now = millis();
-      // give them minute!
-      if (now - cal_start > 60000ul) return false;
-      if (now > disp_update)
+      // arbitrary phase
+      // auto will fix it
+      slot_calibrate_ms = millis();
+      if (ft8_cal_try == 0)
       {
-        disp_update = now + 50ul;
-        ft8_display(0, ft8_state, cal_progress++, true);
-        if (cal_progress > 240) cal_progress = 0;
+        static char buf[32] = "";
+        memset(buf,0,sizeof(buf));
+        snprintf(buf, sizeof(buf), "Searching %lu/%u", ft8_cal_try + 1ul, FT8_CAL_MAX_TRIES);
+        ft8_set_popup(buf,"FT8 AUTOCAL:");
       }
     }
-    slot_calibrate_ms = millis();
-    delay(50);
-    // wait for release
-    while (digitalRead(PIN_ENCBUT) == LOW)
+    else
+    {
       delay(50);
+      // wait for release
+      while (digitalRead(PIN_ENCBUT) == LOW)
+        delay(50);
+
+      uint32_t cal_progress = 0;
+      uint32_t disp_update  = 0;
+      const uint32_t cal_start = millis();
+      while (digitalRead(PIN_ENCBUT) == HIGH)
+      {
+        const uint32_t now = millis();
+        // give them minute!
+        if (now - cal_start > 60000ul) return false;
+        if (now > disp_update)
+        {
+          disp_update = now + 50ul;
+          ft8_display(0, ft8_state, cal_progress++, true);
+          if (cal_progress > 240) cal_progress = 0;
+        }
+      }
+      slot_calibrate_ms = millis();
+      delay(50);
+      // wait for release
+      while (digitalRead(PIN_ENCBUT) == LOW)
+        delay(50);
+    }
   }
 
   //--------------------------------------------------------------------------
@@ -4365,6 +4530,12 @@ static const bool do_ft8(const bool cal_reset = false)
           should_tx = ft8_selected.valid &&
             (ft8_selected.respond_in_even_slot == even_slot);
         }
+        if (radio.ft8_autocal)
+        {
+          // be sure never to TX
+          // while calibrating
+          should_tx = false;
+        }
         if (should_tx)
         {
           ft8_state = FT8_STATE_TRANSMITTING;
@@ -4423,7 +4594,13 @@ static const bool do_ft8(const bool cal_reset = false)
       memset(ft8_lines, 0, sizeof(ft8_lines));
       const uint32_t n = ft8_decode(&ft8mon, ft8_lines, ft8_ui_callback);
       ft8_history_add(ft8_lines, n, even_slot, (uint8_t)slot_num);
-
+      if (radio.ft8_autocal)
+      {
+        if (ft8_auto_calibrate(n, ft8_lines, slot_calibrate_ms) != FT8_CAL_WORKING)
+        {
+          radio.ft8_autocal = false;
+        }
+      }
       if (ft8_qso.active) ft8_qso_check_rx(ft8_lines, n);
 
       // detect if the station we're working is being poached
@@ -4688,18 +4865,10 @@ static void set_notch_filter(void)
   }
 }
 
-static void reset_callsign(void)
-{
-  memset((char*)radio.callsign,0,sizeof(radio.callsign));
-  memset((char*)radio.grid,0,sizeof(radio.grid));
-  save_settings();
-}
-
-static void reboot_callsign(void)
+static void about_reboot(void)
 {
   constexpr uint32_t size = 2;
   static const char *s = "Rebooting...";
-  reset_callsign();
   const int16_t w = (int16_t)(6 * size * (int)strlen(s));
   display_clear();
   lcd.setTextFont(1);
@@ -4713,6 +4882,22 @@ static void reboot_callsign(void)
   {
     tight_loop_contents();
   }
+}
+
+static void reset_callsign(void)
+{
+  // just clear the callsign
+  memset((char*)radio.callsign,0,sizeof(radio.callsign));
+  memset((char*)radio.grid,0,sizeof(radio.grid));
+  save_settings();
+}
+
+static void reboot_callsign(void)
+{
+  // clear and reboot to get
+  // new callsign
+  reset_callsign();
+  about_reboot();
 }
 
 /*
@@ -4745,6 +4930,7 @@ void loop(void)
   static bool old_cessb = radio.cessb;
   static bool old_graph_swr = radio.graph_swr;
   static bool old_notch_enable = radio.notch_enable;
+  static bool old_ft8_autocal = radio.ft8_autocal;
   static mode_t old_mode = radio.mode;
 
   // process button press
@@ -4854,6 +5040,7 @@ void loop(void)
         case OPTION_FT8_CQ_POTA:     radio.ft8_cq = FT8_CQ_POTA;                     break;
         case OPTION_FT8_CQ_SOTA:     radio.ft8_cq = FT8_CQ_SOTA;                     break;
         case OPTION_FT8_CALSET:      do_ft8(true);                                   break;
+        case OPTION_FT8_AUTOCAL:     radio.ft8_autocal = true;                       break;
         case OPTION_CALL_RESET:      reset_callsign();                               break;
         case OPTION_CALL_REBOOT:     reboot_callsign();                              break;
         case OPTION_EXIT:            radio.menu_active = false;                      break;
@@ -4954,6 +5141,16 @@ void loop(void)
         old_graph_swr = radio.graph_swr;
         settings_changed = true;
         set_popup(radio.graph_swr?"Graph SWR":"Numeric SWR");
+      }
+
+      // FT8 auto cal
+      if (radio.ft8_autocal != old_ft8_autocal)
+      {
+        old_ft8_autocal = radio.ft8_autocal;
+        if (radio.ft8_autocal)
+        {
+          set_popup("Auto cal enabled","FT8 INFO:");
+        }
       }
 
       // save the settings
@@ -5097,7 +5294,7 @@ void loop(void)
           case BUTTON_SHORT_PRESS:
           {
             radio.step *= 10u;
-            if (radio.step>1000u) radio.step = 100u;
+            if (radio.step>10000u) radio.step = 100u;
             break;
           }
           case BUTTON_LONG_PRESS:

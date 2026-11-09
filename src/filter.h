@@ -110,14 +110,17 @@ namespace FILTER
     return (y1 = s);
   }
 
+  // 3-section all-pass pair, 250-2700 Hz @ 31250 Hz
+  // phase(fap1f) - phase(fap2f) = -90 degrees, within 0.092 degrees
+  // worst-case opposite-sideband suppression 61.9 dB
   static const float __not_in_flash_func(fap1f)(const float s)
   {
-    // all pass 84 @ 31250
-    // all pass 607 @ 31250
-    // all pass 2539 @ 31250
-    static const float k1 = 0.98325f;
-    static const float k2 = 0.88497f;
-    static const float k3 = 0.59331f;
+    // all pass 80.4 @ 31250
+    // all pass 587 @ 31250
+    // all pass 2465 @ 31250
+    static const float k1 = 0.9839554f;
+    static const float k2 = 0.8883701f;
+    static const float k3 = 0.5962229f;
     static float x1 = 0.0f;
     static float y1 = 0.0f;
     static float x2 = 0.0f;
@@ -135,12 +138,12 @@ namespace FILTER
 
   static const float __not_in_flash_func(fap2f)(const float s)
   {
-    // all pass 8628 @ 31250
-    // all pass 1200 @ 31250
-    // all pass 287 @ 31250
-    static const float k1 = 0.07102f;
-    static const float k2 = 0.78470f;
-    static const float k3 = 0.94391f;
+    // all pass 275 @ 31250
+    // all pass 1172 @ 31250
+    // all pass 7094 @ 31250
+    static const float k1 = 0.9461753f;
+    static const float k2 = 0.7883548f;
+    static const float k3 = 0.0723467f;
     static float x1 = 0.0f;
     static float y1 = 0.0f;
     static float x2 = 0.0f;

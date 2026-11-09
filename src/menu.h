@@ -152,6 +152,7 @@ enum option_value_t
   OPTION_FT8_CQ_POTA,
   OPTION_FT8_CQ_SOTA,
   OPTION_FT8_CALSET,
+  OPTION_FT8_AUTOCAL,
   OPTION_CALL_RESET,
   OPTION_CALL_REBOOT,
   OPTION_NONE,
@@ -212,6 +213,7 @@ menu_options[NUM_MENU_ITEMS] =
     "Mode",
     10U,
     {
+      {OPTION_MODE_AUTO,"AUTO"},
       {OPTION_MODE_LSB,"LSB"},
       {OPTION_MODE_USB,"USB"},
       {OPTION_MODE_CWL,"CWL"},
@@ -220,7 +222,6 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_MODE_DGU,"DGU"},
       {OPTION_MODE_FT8,"FT8"},
       {OPTION_MODE_AM,"AM"},
-      {OPTION_MODE_AUTO,"AUTO"},
       {OPTION_EXIT,"Exit"}
     }
   },
@@ -295,7 +296,7 @@ menu_options[NUM_MENU_ITEMS] =
   {
     MENU_FT8,
     "FT8 Options",
-    7U,
+    8U,
     {
       {OPTION_FT8_CQ_CQ,"CQ"},
       {OPTION_FT8_CQ_DX,"CQ DX"},
@@ -303,8 +304,8 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_FT8_CQ_POTA,"CQ POTA"},
       {OPTION_FT8_CQ_SOTA,"CQ SOTA"},
       {OPTION_FT8_CALSET,"Reset Cal"},
+      {OPTION_FT8_AUTOCAL,"Auto Cal"},
       {OPTION_EXIT,"Exit"},
-      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
