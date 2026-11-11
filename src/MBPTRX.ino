@@ -1,6 +1,6 @@
 /*
  *
- * MBPTRX Version 8.4.240
+ * MBPTRX Version 8.8.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -102,6 +102,10 @@
  *  8.2.240 move mode auto
  *  8.3.240 add 10000 to quick step
  *  8.4.240 fix I2S backlog issue
+ *  8.5.240 iambic A and B keyer
+ *  8.6.240 FT8 monitoring
+ *  8.7.240 robust float FFT
+ *  8.8.240 FT8 unmute if monitoring
  */
 
 //#define DEBUGGING_SKIP
@@ -155,7 +159,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V8.4."
+#define VERSION_STRING "  V8.8."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -383,6 +387,8 @@ volatile static struct
   bool graph_swr;
   bool notch_enable;
   bool ft8_autocal;
+  bool ft8_monitor;
+  bool iambic_b;
   int8_t level[NUM_BANDS];
   int8_t slevel[NUM_BANDS];
   char callsign[16];
@@ -419,6 +425,8 @@ radio =
   false,
   false,
   true,
+  false,
+  false,
   {0,0,0,0,0,0,0,0,0},
   {0,0,0,0,0,0,0,0,0},
   "",
@@ -750,6 +758,8 @@ static void save_settings(void)
   EEPROM.put(i,radio.callsign);
   i += sizeof(radio.callsign);
   EEPROM.put(i,radio.grid);
+  i += sizeof(radio.grid);
+  EEPROM.put(i,(uint32_t)radio.iambic_b?1u:0u);
   EEPROM.end();
   delay(50);
   unmute();
@@ -808,6 +818,9 @@ static void restore_settings(void)
     EEPROM.get(i,radio.callsign);
     i += sizeof(radio.callsign);
     EEPROM.get(i,radio.grid);
+    i += sizeof(radio.grid);
+    EEPROM.get(i,data32);
+    radio.iambic_b = data32==1?true:false;
     radio.callsign[STATION_CALL_MAX] = '\0';
     radio.grid[STATION_GRID_LEN] = '\0';
   }
@@ -2063,8 +2076,8 @@ static void show_menu(void)
         {
           char sz_option_name[16] = "";
           memset(sz_option_name,' ',sizeof(sz_option_name));
-          sz_option_name[10] = '\0';
-          for (int k=1;k<10;k++)
+          sz_option_name[12] = '\0';
+          for (int k=1;k<12;k++)
           {
             const char c = menu_options[menu_current].options[i].option_name[k-1];
             if (c=='\0') break;
@@ -2511,11 +2524,11 @@ void __not_in_flash_func(loop1)(void)
             case MODE_CWU: dac_audio = DSP::process_cw(ii,qq,cwsig);      break;
             case MODE_DGL: dac_audio = DSP::process_dig(qq,ii);           break;
             case MODE_DGU: dac_audio = DSP::process_dig(ii,qq);           break;
-            case MODE_FT8: ft8_audio = DSP::process_ft8(ii,qq);           break;
+            case MODE_FT8: dac_audio = DSP::process_ft8(ii,qq,ft8_audio); break;
           }
           if (radio.mode==MODE_FT8)
           {
-            dac_audio = 2048l;
+            dac_audio = radio.ft8_monitor?dac_audio:0;
             volatile static struct {uint32_t c : 2; } downsample = { 0 };
             if (downsample.c == 0)
             {
@@ -2525,11 +2538,8 @@ void __not_in_flash_func(loop1)(void)
             }
             downsample.c++;
           }
-          else
-          {
-            dac_audio = constrain(dac_audio,-2048l,+2047l);
-            dac_audio += 2048l;
-          }
+          dac_audio = constrain(dac_audio,-2048l,+2047l);
+          dac_audio += 2048l;
           dac_h = dac_audio >> 6;
           dac_l = dac_audio & 0x3f;
           if (radio.cwdecode!=0)
@@ -2699,6 +2709,82 @@ static void process_vox_tx(void)
   }
 }
 
+// ---------------------------------------------------------------------------
+// Iambic keyer paddle tracking
+//
+// While one element (and the space after it) is being sent the other paddle
+// is watched, and remembered in dit_latched / dah_latched:
+//
+//   iambic B: remembered if the paddle is closed at any time, so releasing
+//             a squeeze sends one more (opposite) element
+//   iambic A: remembered only if the paddle is newly pressed, so releasing
+//             a squeeze finishes the current element and stops, but a tap
+//             on the other paddle is still not missed
+//
+// A new press needs the paddle to have been open for CW_PADDLE_DEBOUNCE ms,
+// otherwise contact bounce on release looks like a new press in iambic A.
+// ---------------------------------------------------------------------------
+#define CW_PADDLE_DEBOUNCE 5ul
+
+struct cw_paddle_t
+{
+  uint8_t pin;
+  bool closed;     // contact closed at the last poll
+  bool down;       // debounced paddle state
+  bool pressed;    // new press seen at the last poll
+  bool opening;    // contact open, waiting for debounce
+  uint32_t opened; // when the contact was first seen open
+
+  void reset(void)
+  {
+    closed = false;
+    down = false;
+    pressed = false;
+    opening = false;
+    opened = 0;
+  }
+
+  void poll(void)
+  {
+    pressed = false;
+    closed = (digitalRead(pin)==LOW);
+    if (closed)
+    {
+      opening = false;
+      if (!down)
+      {
+        down = true;
+        pressed = true;
+      }
+      return;
+    }
+    if (!down)
+    {
+      return;
+    }
+    const uint32_t now = millis();
+    if (!opening)
+    {
+      opening = true;
+      opened = now;
+    }
+    else if (now-opened>=CW_PADDLE_DEBOUNCE)
+    {
+      down = false;
+      opening = false;
+    }
+  }
+
+  // remember this paddle while the other element is being sent?
+  bool remember(void) const
+  {
+    return radio.iambic_b?closed:pressed;
+  }
+};
+
+static cw_paddle_t dit_paddle = {PIN_PADA,false,false,false,false,0u};
+static cw_paddle_t dah_paddle = {PIN_PADB,false,false,false,false,0u};
+
 static void cw_dit_delay(const uint32_t ms,const uint32_t level)
 {
   const uint32_t delay_time = millis()+ms;
@@ -2706,7 +2792,9 @@ static void cw_dit_delay(const uint32_t ms,const uint32_t level)
   while (delay_time>millis())
   {
     // check for dah
-    if (digitalRead(PIN_PADB)==LOW)
+    dit_paddle.poll();
+    dah_paddle.poll();
+    if (dah_paddle.remember())
     {
       dah_latched = true;
     }
@@ -2720,9 +2808,32 @@ static void cw_dah_delay(const uint32_t ms,const uint32_t level)
   while (delay_time>millis())
   {
     // check for dit
-    if (digitalRead(PIN_PADA)==LOW)
+    dit_paddle.poll();
+    dah_paddle.poll();
+    if (dit_paddle.remember())
     {
       dit_latched = true;
+    }
+  }
+}
+
+// time for the PA to start up before the first element is keyed
+// either paddle closing during this time is remembered
+static void cw_tx_delay(const uint32_t ms)
+{
+  const uint32_t delay_time = millis()+ms;
+  update_display(0u);
+  while (delay_time>millis())
+  {
+    dit_paddle.poll();
+    dah_paddle.poll();
+    if (dit_paddle.closed)
+    {
+      dit_latched = true;
+    }
+    if (dah_paddle.closed)
+    {
+      dah_latched = true;
     }
   }
 }
@@ -2748,6 +2859,19 @@ static void process_key(void)
   // clear spectrum
   memset(magnitude,0,sizeof(magnitude));
 
+  // the paddles are not tracked in receive
+  dit_paddle.reset();
+  dah_paddle.reset();
+
+  // did the dah paddle start TX?
+  bool dah_first = dah_latched && !dit_latched;
+
+  if (dit_latched || dah_latched)
+  {
+    // PA start up time before the first element (one dit, as V8.4)
+    cw_tx_delay(radio.cw_dit);
+  }
+
   // stay here until timeout after key up (PTT released)
   uint32_t cw_timeout = millis() + CW_TIMEOUT;
   for (;;)
@@ -2770,11 +2894,15 @@ static void process_key(void)
       update_display(0u);
       cw_timeout = millis() + CW_TIMEOUT;
     }
-    if (digitalRead(PIN_PADA)==LOW || dit_latched)
+    // keep the paddle tracking up to date
+    dit_paddle.poll();
+    dah_paddle.poll();
+
+    // if the dah paddle started TX the dah goes first
+    if (!dah_first && (dit_latched || digitalRead(PIN_PADA)==LOW))
     {
-      // dit
+      // dit then the space after it
       dit_latched = false;
-      cw_dit_delay(radio.cw_dit,0u);
       radio.keydown = true;
       magnitude[512] = spectrum_display_level;
       digitalWrite(LED_BUILTIN,HIGH);
@@ -2782,13 +2910,13 @@ static void process_key(void)
       radio.keydown = false;
       magnitude[512] = 0u;
       digitalWrite(LED_BUILTIN,LOW);
+      cw_dit_delay(radio.cw_dit,0u);
       cw_timeout = millis() + CW_TIMEOUT;
     }
     if (digitalRead(PIN_PADB)==LOW || dah_latched)
     {
-      // dah
+      // dah then the space after it
       dah_latched = false;
-      cw_dah_delay(radio.cw_dit,0u);
       radio.keydown = true;
       magnitude[512] = spectrum_display_level;
       digitalWrite(LED_BUILTIN,HIGH);
@@ -2796,8 +2924,10 @@ static void process_key(void)
       radio.keydown = false;
       magnitude[512] = 0u;
       digitalWrite(LED_BUILTIN,LOW);
+      cw_dah_delay(radio.cw_dit,0u);
       cw_timeout = millis() + CW_TIMEOUT;
     }
+    dah_first = false;
     if (millis()>cw_timeout)
     {
       break;
@@ -3813,7 +3943,12 @@ static void ft8_disable_tx(void)
 
   // Restore RX frequency (no ft8_offset)
   set_frequency();
-  unmute();
+
+  // only unmute if monitoring audio
+  if (radio.ft8_monitor)
+  {
+    unmute();
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -4931,6 +5066,8 @@ void loop(void)
   static bool old_graph_swr = radio.graph_swr;
   static bool old_notch_enable = radio.notch_enable;
   static bool old_ft8_autocal = radio.ft8_autocal;
+  static bool old_ft8_monitor = radio.ft8_monitor;
+  static bool old_iambic_b = radio.iambic_b;
   static mode_t old_mode = radio.mode;
 
   // process button press
@@ -4997,6 +5134,8 @@ void loop(void)
         case OPTION_CW_SPEED_20:     radio.cw_dit = 60u;                             break;
         case OPTION_CW_SPEED_25:     radio.cw_dit = 48u;                             break;
         case OPTION_CW_SPEED_30:     radio.cw_dit = 40u;                             break;
+        case OPTION_IAMBIC_A:        radio.iambic_b = false;                         break;
+        case OPTION_IAMBIC_B:        radio.iambic_b = true;                          break;
         case OPTION_DECODE_ADAPTIVE: radio.cwdecode = 1;                             break;
         case OPTION_DECODE_SCHMITT:  radio.cwdecode = 2;                             break;
         case OPTION_CWDECODE_OFF:    radio.cwdecode = 0;                             break;
@@ -5041,6 +5180,8 @@ void loop(void)
         case OPTION_FT8_CQ_SOTA:     radio.ft8_cq = FT8_CQ_SOTA;                     break;
         case OPTION_FT8_CALSET:      do_ft8(true);                                   break;
         case OPTION_FT8_AUTOCAL:     radio.ft8_autocal = true;                       break;
+        case OPTION_FT8_MONITOR_ON:  radio.ft8_monitor = true;                       break;
+        case OPTION_FT8_MONITOR_OFF: radio.ft8_monitor = false;                      break;
         case OPTION_CALL_RESET:      reset_callsign();                               break;
         case OPTION_CALL_REBOOT:     reboot_callsign();                              break;
         case OPTION_EXIT:            radio.menu_active = false;                      break;
@@ -5143,6 +5284,14 @@ void loop(void)
         set_popup(radio.graph_swr?"Graph SWR":"Numeric SWR");
       }
 
+      // iambic keyer mode
+      if (radio.iambic_b != old_iambic_b)
+      {
+        old_iambic_b = radio.iambic_b;
+        settings_changed = true;
+        set_popup(radio.iambic_b?"Iambic B":"Iambic A","CW KEYER:");
+      }
+
       // FT8 auto cal
       if (radio.ft8_autocal != old_ft8_autocal)
       {
@@ -5151,6 +5300,13 @@ void loop(void)
         {
           set_popup("Auto cal enabled","FT8 INFO:");
         }
+      }
+
+      // FT8 monitor audio
+      if (radio.ft8_monitor != old_ft8_monitor)
+      {
+        old_ft8_monitor = radio.ft8_monitor;
+        set_popup(radio.ft8_monitor?"Monitor On":"Monitor Off","FT8 INFO:");
       }
 
       // save the settings
@@ -5387,6 +5543,10 @@ void loop(void)
     }
     if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
     {
+      // remember which paddle started TX
+      // it may be released before TX is ready
+      dit_latched = b_PADA;
+      dah_latched = b_PADB;
       process_key();
     }
     else if (b_PTT)

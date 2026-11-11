@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 20U
+#define NUM_MENU_ITEMS 21U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -45,6 +45,7 @@ enum menu_top_t
   MENU_CW_SPEED,
   MENU_CW_DECODE,
   MENU_SIDETONE,
+  MENU_CW_KEYER,
   MENU_SIDETONE_LEVEL,
   MENU_SPECTRUM_TYPE,
   MENU_JNR,
@@ -114,6 +115,8 @@ enum option_value_t
   OPTION_SIDETONE_LOW,
   OPTION_SIDETONE_MED,
   OPTION_SIDETONE_HI,
+  OPTION_IAMBIC_A,
+  OPTION_IAMBIC_B,
   OPTION_SPECTRUM_WIND,
   OPTION_SPECTRUM_GRASS,
   OPTION_SPEC_SETLEVEL,
@@ -153,6 +156,8 @@ enum option_value_t
   OPTION_FT8_CQ_SOTA,
   OPTION_FT8_CALSET,
   OPTION_FT8_AUTOCAL,
+  OPTION_FT8_MONITOR_ON,
+  OPTION_FT8_MONITOR_OFF,
   OPTION_CALL_RESET,
   OPTION_CALL_REBOOT,
   OPTION_NONE,
@@ -296,7 +301,7 @@ menu_options[NUM_MENU_ITEMS] =
   {
     MENU_FT8,
     "FT8 Options",
-    8U,
+    10U,
     {
       {OPTION_FT8_CQ_CQ,"CQ"},
       {OPTION_FT8_CQ_DX,"CQ DX"},
@@ -305,7 +310,74 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_FT8_CQ_SOTA,"CQ SOTA"},
       {OPTION_FT8_CALSET,"Reset Cal"},
       {OPTION_FT8_AUTOCAL,"Auto Cal"},
+      {OPTION_FT8_MONITOR_ON,"Monitor On"},
+      {OPTION_FT8_MONITOR_OFF,"Monitor Off"},
+      {OPTION_EXIT,"Exit"}
+    }
+  },
+  {
+    MENU_SPECTRUM_TYPE,
+    "Spectrum",
+    5U,
+    {
+      {OPTION_SPECTRUM_WIND,"Wind"},
+      {OPTION_SPECTRUM_GRASS,"Grass"},
+      {OPTION_SPEC_SETLEVEL,"Set Level"},
+      {OPTION_SPEC_ADJLEVEL,"Adj Level"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
+    }
+  },
+  {
+    MENU_MIC,
+    "Mic Gain",
+    9U,
+    {
+      {OPTION_MIC_25,"Gain 25%"},
+      {OPTION_MIC_50,"Gain 50%"},
+      {OPTION_MIC_75,"Gain 75%"},
+      {OPTION_MIC_100,"Gain 100%"},
+      {OPTION_MIC_125,"Gain 125%"},
+      {OPTION_MIC_150,"Gain 150%"},
+      {OPTION_MIC_175,"Gain 175%"},
+      {OPTION_MIC_200,"Gain 200%"},
+      {OPTION_EXIT,"Exit"},
+    }
+  },
+  {
+    MENU_MIC_PROC,
+    "Mic Proc",
+    7U,
+    {
+      {OPTION_MIC_PROC1,"Level 1"},
+      {OPTION_MIC_PROC2,"Level 2"},
+      {OPTION_MIC_PROC3,"Level 3"},
+      {OPTION_MIC_PROC4,"Level 4"},
+      {OPTION_MIC_PROC5,"Level 5"},
+      {OPTION_MIC_PROC_OFF,"Off"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
+    }
+  },
+  {
+    MENU_CW_DECODE,
+    "CW Decode",
+    4U,
+    {
+      {OPTION_DECODE_ADAPTIVE,"Adaptive"},
+      {OPTION_DECODE_SCHMITT,"Schmitt"},
+      {OPTION_CWDECODE_OFF,"Off"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
@@ -362,67 +434,17 @@ menu_options[NUM_MENU_ITEMS] =
     }
   },
   {
-    MENU_CW_DECODE,
-    "CW Decode",
-    4U,
+    MENU_CW_KEYER,
+    "CW Keyer",
+    3U,
     {
-      {OPTION_DECODE_ADAPTIVE,"Adaptive"},
-      {OPTION_DECODE_SCHMITT,"Schmitt"},
-      {OPTION_CWDECODE_OFF,"Off"},
+      {OPTION_IAMBIC_A,"Iambic A"},
+      {OPTION_IAMBIC_B,"Iambic B"},
       {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"}
-    }
-  },
-  {
-    MENU_SPECTRUM_TYPE,
-    "Spectrum",
-    5U,
-    {
-      {OPTION_SPECTRUM_WIND,"Wind"},
-      {OPTION_SPECTRUM_GRASS,"Grass"},
-      {OPTION_SPEC_SETLEVEL,"Set Level"},
-      {OPTION_SPEC_ADJLEVEL,"Adj Level"},
-      {OPTION_EXIT,"Exit"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"}
-    }
-  },
-  {
-    MENU_MIC,
-    "Mic Gain",
-    9U,
-    {
-      {OPTION_MIC_25,"Gain 25%"},
-      {OPTION_MIC_50,"Gain 50%"},
-      {OPTION_MIC_75,"Gain 75%"},
-      {OPTION_MIC_100,"Gain 100%"},
-      {OPTION_MIC_125,"Gain 125%"},
-      {OPTION_MIC_150,"Gain 150%"},
-      {OPTION_MIC_175,"Gain 175%"},
-      {OPTION_MIC_200,"Gain 200%"},
-      {OPTION_EXIT,"Exit"},
-    }
-  },
-  {
-    MENU_MIC_PROC,
-    "Mic Proc",
-    7U,
-    {
-      {OPTION_MIC_PROC1,"Level 1"},
-      {OPTION_MIC_PROC2,"Level 2"},
-      {OPTION_MIC_PROC3,"Level 3"},
-      {OPTION_MIC_PROC4,"Level 4"},
-      {OPTION_MIC_PROC5,"Level 5"},
-      {OPTION_MIC_PROC_OFF,"Off"},
-      {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}

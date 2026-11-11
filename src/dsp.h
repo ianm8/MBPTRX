@@ -93,12 +93,11 @@ namespace DSP
     // triggers at levels 3-5 are noise peaks and voice transients, so this
     // keeps the damage to signals the same as before.
     //
-    // Big pops get more. By the time a fast pop reaches here, the DDC's
-    // 252-tap linear-phase FIR has spread it into a burst that rings on BOTH
-    // sides of its peak, falling only ~2.2 dB per sample:
-    //
-    //   offset (samples)  0    +/-1   +/-2   +/-4   +/-6   +/-10   +/-14
-    //   level   (dB)      0    -2.9  -11.6  -19.2  -24.1  -32.6   -37
+    // Big pops get more. RING_DB_PER_SAMPLE is not calibrated.
+    // If big pops still click at levels 3–5, lower RING_DB_PER_SAMPLE or
+    // raise GUARD_EXTRA_MAX. If the noise blanker audibly chews up
+    // signals on big pops, try asymmetric guards:
+    //   keep only GUARD_PRE before the pop and apply extra after it.
     //
     // Blanking only the samples over the threshold leaves that ringing, which
     // still clicks. So a pop more than BIG_POP_DB over the threshold also
@@ -405,7 +404,7 @@ namespace DSP
     return agc(audio_out * 32768.0f);
   }
 
-  static const float __not_in_flash_func(process_ft8)(const int16_t in_i,const int16_t in_q)
+  static const int16_t __not_in_flash_func(process_ft8)(const int16_t in_i,const int16_t in_q,float &ft8_audio)
   {
     // quadrature mixer
 
@@ -441,13 +440,10 @@ namespace DSP
     const float ssb = p45 - n45;
 
     // LPF
-    const float audio_out = FILTER::lpf_3000f_rx(ssb);
+    ft8_audio = FILTER::lpf_3000f_rx(ssb);
 
-    // AGC for s-meter
-    agc(audio_out * 32768.0f);
-
-    // return raw float value
-    return audio_out;
+    // AGC for audio monitoring and s-meter
+    return agc(ft8_audio * 32768.0f);
   }
 
   static const int16_t __not_in_flash_func(process_cw)(const int16_t in_i,const int16_t in_q,float &sig)
