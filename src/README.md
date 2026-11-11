@@ -85,3 +85,7 @@
  * 8.2.240 move mode auto
  * 8.3.240 add 10000 to quick step
  * 8.4.240 fix I2S backlog issue
+ * 8.5.240 iambic A and B keyer
+ * 8.6.240 FT8 monitoring
+ * 8.7.240 robust float FFT
+ * 8.8.240 FT8 unmute if monitoring
