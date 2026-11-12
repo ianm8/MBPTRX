@@ -1,5 +1,5 @@
 # MBPTRX
-A software defined multi-band phasing transceiver. See the ![Manual](https://github.com/ianm8/MBPTRX/blob/main/docs/manual/MBPTRX_User_Manual.md) for further details.
+A software defined multi-band phasing transceiver. See the [Manual](https://github.com/ianm8/MBPTRX/blob/main/docs/manual/MBPTRX_User_Manual.md) for further details.
 
 ## Some Specifications
  * SSB, CW, FT8, Other digital modes using vox
