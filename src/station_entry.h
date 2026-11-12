@@ -484,7 +484,7 @@ static const bool entry_editor(const char *title, char *buf, const uint8_t nchar
       {
         entry_draw(title, buf, nchars, cursor, nact,
           "NEED A LETTER AND A DIGIT",
-          "3 TO 11 CHARACTERS", ENTRY_COL_CANCEL);
+          "3 TO 6 CHARACTERS", ENTRY_COL_CANCEL);
       }
       else if (cursor < nchars)
       {

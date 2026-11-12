@@ -32,7 +32,7 @@
 
 */
 
-#define NUM_MENU_ITEMS 21U
+#define NUM_MENU_ITEMS 20U
 #define NUM_MENU_OPTIONS 10U
 
 enum menu_top_t
@@ -54,7 +54,6 @@ enum menu_top_t
   MENU_MIC_PROC,
   MENU_CESSB,
   MENU_GRAPH_SWR,
-  MENU_GAUSSIAN,
   MENU_FT8,
   MENU_CALLSIGN,
   MENU_EXIT
@@ -94,8 +93,6 @@ enum option_value_t
   OPTION_BW_2800,
   OPTION_NOTCH_ON,
   OPTION_NOTCH_OFF,
-  OPTION_GAUSSIAN_ON,
-  OPTION_GAUSSIAN_OFF,
   OPTION_CW_SPEED_10,
   OPTION_CW_SPEED_15,
   OPTION_CW_SPEED_20,
@@ -104,14 +101,11 @@ enum option_value_t
   OPTION_DECODE_ADAPTIVE,
   OPTION_DECODE_SCHMITT,
   OPTION_CWDECODE_OFF,
-  OPTION_SIDETONE_500,
-  OPTION_SIDETONE_550,
   OPTION_SIDETONE_600,
   OPTION_SIDETONE_650,
   OPTION_SIDETONE_700,
   OPTION_SIDETONE_750,
   OPTION_SIDETONE_800,
-  OPTION_SIDETONE_850,
   OPTION_SIDETONE_LOW,
   OPTION_SIDETONE_MED,
   OPTION_SIDETONE_HI,
@@ -402,17 +396,17 @@ menu_options[NUM_MENU_ITEMS] =
   {
     MENU_SIDETONE,
     "CW Tone",
-    9U,
+    6U,
     {
-      {OPTION_SIDETONE_500,"500 Hz"},
-      {OPTION_SIDETONE_550,"550 Hz"},
       {OPTION_SIDETONE_600,"600 Hz"},
       {OPTION_SIDETONE_650,"650 Hz"},
       {OPTION_SIDETONE_700,"700 Hz"},
       {OPTION_SIDETONE_750,"750 Hz"},
       {OPTION_SIDETONE_800,"800 Hz"},
-      {OPTION_SIDETONE_850,"850 Hz"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
@@ -474,23 +468,6 @@ menu_options[NUM_MENU_ITEMS] =
     {
       {OPTION_CESSB_ON,"On"},
       {OPTION_CESSB_OFF,"Off"},
-      {OPTION_EXIT,"Exit"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"}
-    }
-  },
-  {
-    MENU_GAUSSIAN,
-    "Gaussian",
-    3U,
-    {
-      {OPTION_GAUSSIAN_ON,"On"},
-      {OPTION_GAUSSIAN_OFF,"Off"},
       {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},

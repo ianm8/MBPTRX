@@ -1,6 +1,6 @@
 /*
  *
- * MBPTRX Version 8.8.240
+ * MBPTRX Version 9.5.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -106,6 +106,13 @@
  *  8.6.240 FT8 monitoring
  *  8.7.240 robust float FFT
  *  8.8.240 FT8 unmute if monitoring
+ *  8.9.240 FT8 clear autocal
+ *  9.0.240 remove unused gaussian
+ *  9.1.240 FT8 on Ham band only
+ *  9.2.240 fix call entry message
+ *  9.3.240 fix CW sidetone
+ *  9.4.240 fix sidetone level
+ *  9.5.240 FT8 autocal lock
  */
 
 //#define DEBUGGING_SKIP
@@ -159,7 +166,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V8.8."
+#define VERSION_STRING "  V9.5."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -381,7 +388,6 @@ volatile static struct
   bool tx_enable;
   bool keydown;
   bool cessb;
-  bool gaussian;
   bool menu_active;
   bool mode_auto;
   bool graph_swr;
@@ -419,7 +425,6 @@ radio =
   false,
   false,
   false,
-  true,
   false,
   true,
   false,
@@ -832,7 +837,7 @@ static void restore_settings(void)
   {
     radio.cw_level = DEFAULT_CW_LEVEL;
   }
-  if (radio.sidetone<500 || radio.sidetone>850)
+  if (radio.sidetone<600 || radio.sidetone>800)
   {
     radio.sidetone = DEFAULT_SIDETONE;
   }
@@ -2386,7 +2391,7 @@ void __not_in_flash_func(loop1)(void)
         else if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
         {
           // generate the sidetone
-          int32_t dac_audio = CW::sidetone(radio.keydown);
+          int32_t dac_audio = CW::sidetone(radio.keydown,radio.cw_phase,radio.cw_level);
           dac_audio = constrain(dac_audio,-2048l,+2047l);
           dac_audio += 2048l;
           dac_h = dac_audio >> 6;
@@ -4517,6 +4522,9 @@ static const bool do_ft8(const bool cal_reset = false)
 {
   // Persistent state across calls
   static uint32_t slot_calibrate_ms = 0;
+  // true once the slot timing is known to be right
+  // (manual button press or an autocal lock)
+  static bool slot_locked = false;
   static uint32_t progress = 0;
   static ft8_state_t ft8_state = FT8_STATE_WAITING;
   static bool ft8_hash_init = false;
@@ -4532,7 +4540,25 @@ static const bool do_ft8(const bool cal_reset = false)
   if (cal_reset)
   {
     slot_calibrate_ms = 0;
+    slot_locked = false;
+    radio.ft8_autocal = false;
     set_popup("Calibration Reset","FT8 INFO:");
+    return false;
+  }
+
+  // check Ham frequency
+  bool ham_band = false;
+  for (int i=0;i<8;i++)
+  {
+    if (radio.frequency >= bands[i].lo && radio.frequency <= bands[i].hi)
+    {
+      ham_band = true;
+      break;
+    }
+  }
+  if (!ham_band)
+  {
+    set_popup("Choose Ham Band","FT8 ERROR:");
     return false;
   }
 
@@ -4578,6 +4604,7 @@ static const bool do_ft8(const bool cal_reset = false)
         }
       }
       slot_calibrate_ms = millis();
+      slot_locked = true;
       delay(50);
       // wait for release
       while (digitalRead(PIN_ENCBUT) == LOW)
@@ -4731,9 +4758,29 @@ static const bool do_ft8(const bool cal_reset = false)
       ft8_history_add(ft8_lines, n, even_slot, (uint8_t)slot_num);
       if (radio.ft8_autocal)
       {
-        if (ft8_auto_calibrate(n, ft8_lines, slot_calibrate_ms) != FT8_CAL_WORKING)
+        const uint32_t cal_before = slot_calibrate_ms;
+        const ft8_cal_result_t cal_result = ft8_auto_calibrate(n, ft8_lines, slot_calibrate_ms);
+        if (cal_result == FT8_CAL_DONE)
         {
+          // timing now matches the received signals
+          slot_locked = true;
           radio.ft8_autocal = false;
+        }
+        else if (slot_locked)
+        {
+          // autocal re-run on a calibrated radio
+          // never step a good calibration
+          slot_calibrate_ms = cal_before;
+          if (cal_result == FT8_CAL_NOSIGNAL)
+          {
+            radio.ft8_autocal = false;
+          }
+        }
+        else if (cal_result == FT8_CAL_NOSIGNAL)
+        {
+          // never locked, so the timing is still arbitrary
+          // leave autocal on (TX stays blocked) and keep searching
+          ft8_cal_try = 0;
         }
       }
       if (ft8_qso.active) ft8_qso_check_rx(ft8_lines, n);
@@ -5118,14 +5165,11 @@ void loop(void)
         case OPTION_BW_2800:         radio.bandwidth = 5ul;                          break;
         case OPTION_NOTCH_ON:        radio.notch_enable = true;                      break;
         case OPTION_NOTCH_OFF:       radio.notch_enable = false;                     break;
-        case OPTION_SIDETONE_500:    radio.sidetone = 500u;                          break;
-        case OPTION_SIDETONE_550:    radio.sidetone = 550u;                          break;
         case OPTION_SIDETONE_600:    radio.sidetone = 600u;                          break;
         case OPTION_SIDETONE_650:    radio.sidetone = 650u;                          break;
         case OPTION_SIDETONE_700:    radio.sidetone = 700u;                          break;
         case OPTION_SIDETONE_750:    radio.sidetone = 750u;                          break;
         case OPTION_SIDETONE_800:    radio.sidetone = 800u;                          break;
-        case OPTION_SIDETONE_850:    radio.sidetone = 850u;                          break;
         case OPTION_SIDETONE_LOW:    radio.cw_level = 1u;                            break;
         case OPTION_SIDETONE_MED:    radio.cw_level = 2u;                            break;
         case OPTION_SIDETONE_HI:     radio.cw_level = 3u;                            break;
@@ -5169,8 +5213,6 @@ void loop(void)
         case OPTION_MIC_PROC_OFF:    radio.micproc = MIC_PROC_OFF;                   break;
         case OPTION_CESSB_ON:        radio.cessb = true;                             break;
         case OPTION_CESSB_OFF:       radio.cessb = false;                            break;
-        case OPTION_GAUSSIAN_ON:     radio.gaussian = true;                          break;
-        case OPTION_GAUSSIAN_OFF:    radio.gaussian = false;                         break;
         case OPTION_GRAPH_SWR_Y:     radio.graph_swr = true;                         break;
         case OPTION_GRAPH_SWR_N:     radio.graph_swr = false;                        break;
         case OPTION_FT8_CQ_CQ:       radio.ft8_cq = FT8_CQ_CQ;                       break;

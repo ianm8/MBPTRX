@@ -1510,12 +1510,12 @@ namespace CW
     }
   }
 
-  static const int16_t __not_in_flash_func(sidetone)(const bool keydown)
+  static const int16_t __not_in_flash_func(sidetone)(
+      const bool keydown,
+      const uint32_t phase,
+      const uint32_t level)
   {
-    static const uint64_t tone = 700ull;
-    static const uint32_t level = 3u;
-    static const uint32_t shift = 8u - level;
-    static const uint32_t phase = (uint32_t)((tone * (1ull << 32)) / SAMPLERATE);
+    const uint32_t shift = 8u - level;
     volatile static uint32_t dds = 0;
     // position in gaussian_tab: 0 = full level, GAUSSIAN_TAB-1 = silent
     // walks one entry per sample so the tone has the same edge as the RF
