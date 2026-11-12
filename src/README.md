@@ -89,3 +89,10 @@
  * 8.6.240 FT8 monitoring
  * 8.7.240 robust float FFT
  * 8.8.240 FT8 unmute if monitoring
+ * 8.9.240 FT8 clear autocal
+ * 9.0.240 remove unused gaussian
+ * 9.1.240 FT8 on Ham band only
+ * 9.2.240 fix call entry message
+ * 9.3.240 fix CW sidetone
+ * 9.4.240 fix sidetone level
+ * 9.5.240 FT8 autocal lock
