@@ -2,9 +2,9 @@
 A software defined multi-band phasing transceiver. See the [Manual](https://github.com/ianm8/MBPTRX/blob/main/docs/manual/MBPTRX_User_Manual.md) for further details.
 
 ## Some Specifications
- * SSB, CW, FT8, Other digital modes using vox
+ * SSB, CW, FM, FT8, Other digital modes using vox
  * 80m - 10m, nominally 10W
- * 3.5MHz - 30MHz SWL
+ * 3.5MHz - 30MHz SWL including AM
  * 30 KHz spectrum display
  * Noise reduction
  * Noise blanker
