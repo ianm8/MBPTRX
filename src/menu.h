@@ -32,8 +32,9 @@
 
 */
 
-#define NUM_MENU_ITEMS 20U
-#define NUM_MENU_OPTIONS 10U
+// FM: one more menu (FM Squelch), and Mode now has 11 options
+#define NUM_MENU_ITEMS 21U
+#define NUM_MENU_OPTIONS 11U
 
 enum menu_top_t
 {
@@ -42,6 +43,7 @@ enum menu_top_t
   MENU_MODE,
   MENU_BANDWIDTH,
   MENU_NOTCH,
+  MENU_SQUELCH,
   MENU_CW_SPEED,
   MENU_CW_DECODE,
   MENU_SIDETONE,
@@ -76,6 +78,7 @@ enum option_value_t
   OPTION_MODE_DGU,
   OPTION_MODE_FT8,
   OPTION_MODE_AM,
+  OPTION_MODE_FM,
   OPTION_MODE_AUTO,
   OPTION_BAND_80M,
   OPTION_BAND_40M,
@@ -125,6 +128,12 @@ enum option_value_t
   OPTION_NB_LEVEL3,
   OPTION_NB_LEVEL4,
   OPTION_NB_LEVEL5,
+  OPTION_SQL_OFF,
+  OPTION_SQL_LEVEL1,
+  OPTION_SQL_LEVEL2,
+  OPTION_SQL_LEVEL3,
+  OPTION_SQL_LEVEL4,
+  OPTION_SQL_LEVEL5,
   OPTION_MIC_25,
   OPTION_MIC_50,
   OPTION_MIC_75,
@@ -187,7 +196,8 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_BAND_12M,"12M"},
       {OPTION_BAND_10M,"10M"},
       {OPTION_BAND_SWL,"SWL"},
-      {OPTION_EXIT,"Exit"}
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"}
     }
   },
   {
@@ -204,13 +214,14 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_STEP_100000,"100000"},
       {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
   {
     MENU_MODE,
     "Mode",
-    10U,
+    11U,
     {
       {OPTION_MODE_AUTO,"AUTO"},
       {OPTION_MODE_LSB,"LSB"},
@@ -221,6 +232,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_MODE_DGU,"DGU"},
       {OPTION_MODE_FT8,"FT8"},
       {OPTION_MODE_AM,"AM"},
+      {OPTION_MODE_FM,"FM"},
       {OPTION_EXIT,"Exit"}
     }
   },
@@ -234,6 +246,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_JNR_LEVEL3,"Level 3"},
       {OPTION_JNR_OFF,"Off"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
@@ -255,6 +268,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
@@ -269,6 +283,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_BW_2600,"2600 Hz"},
       {OPTION_BW_2800,"2800 Hz"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
@@ -289,6 +304,25 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
+    }
+  },
+  {
+    MENU_SQUELCH,
+    "FM Squelch",
+    7U,
+    {
+      {OPTION_SQL_LEVEL1,"Level 1"},
+      {OPTION_SQL_LEVEL2,"Level 2"},
+      {OPTION_SQL_LEVEL3,"Level 3"},
+      {OPTION_SQL_LEVEL4,"Level 4"},
+      {OPTION_SQL_LEVEL5,"Level 5"},
+      {OPTION_SQL_OFF,"Off"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
@@ -306,7 +340,8 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_FT8_AUTOCAL,"Auto Cal"},
       {OPTION_FT8_MONITOR_ON,"Monitor On"},
       {OPTION_FT8_MONITOR_OFF,"Monitor Off"},
-      {OPTION_EXIT,"Exit"}
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"}
     }
   },
   {
@@ -319,6 +354,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_SPEC_SETLEVEL,"Set Level"},
       {OPTION_SPEC_ADJLEVEL,"Adj Level"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
@@ -340,6 +376,8 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_MIC_175,"Gain 175%"},
       {OPTION_MIC_200,"Gain 200%"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
     }
   },
   {
@@ -356,6 +394,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_EXIT,"Exit"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
@@ -368,6 +407,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_DECODE_SCHMITT,"Schmitt"},
       {OPTION_CWDECODE_OFF,"Off"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
@@ -390,6 +430,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
@@ -404,6 +445,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_SIDETONE_750,"750 Hz"},
       {OPTION_SIDETONE_800,"800 Hz"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
@@ -424,6 +466,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
@@ -435,6 +478,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_IAMBIC_A,"Iambic A"},
       {OPTION_IAMBIC_B,"Iambic B"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
@@ -458,6 +502,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
@@ -469,6 +514,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_CESSB_ON,"On"},
       {OPTION_CESSB_OFF,"Off"},
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
@@ -492,6 +538,7 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"}
     }
   },
@@ -501,6 +548,7 @@ menu_options[NUM_MENU_ITEMS] =
     1U,
     {
       {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},
       {OPTION_NONE,"None"},

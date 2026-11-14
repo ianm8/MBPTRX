@@ -42,7 +42,7 @@ namespace spectrum
     0xffffu
   };
 
-  static const int16_t __not_in_flash("fast_access_sram") window_hanning_1024[] =
+  static const int16_t window_hanning_1024[] =
   {
     0,     0,     1,     2,     4,     7,     11,    15,    19,    25,    30,
     37,    44,    52,    60,    69,    79,    89,    100,   111,   123,   136,
@@ -141,7 +141,7 @@ namespace spectrum
   };
 
     // fft_cos_tab[k] =  cos(2*pi*k/N),  k = 0..N/2-1
-  static const float __not_in_flash("fast_access_sram") fft_cos_tab[FFT_N / 2] =
+  static const float fft_cos_tab[FFT_N / 2] =
   {
     1.0f, 0.999981165f, 0.999924719f, 0.999830604f, 0.999698818f, 0.999529421f,
     0.999322355f, 0.999077737f, 0.99879545f, 0.998475552f, 0.998118103f, 0.997723043f,
@@ -232,7 +232,7 @@ namespace spectrum
   };
 
   // fft_sin_tab[k] = -sin(2*pi*k/N),  k = 0..N/2-1   (forward transform)
-  static const float __not_in_flash("fast_access_sram") fft_sin_tab[FFT_N / 2] =
+  static const float fft_sin_tab[FFT_N / 2] =
   {
     0.0f, -0.00613588467f, -0.0122715384f, -0.0184067301f, -0.024541229f, -0.030674804f,
     -0.0368072242f, -0.0429382585f, -0.0490676761f, -0.0551952459f, -0.061320737f, -0.0674439222f,
@@ -326,7 +326,7 @@ namespace spectrum
   {
     // return a 5 bit log value
     if (l>4095) return 0x1fu;
-    static const uint8_t __not_in_flash("fast_access_sram") logtab32[4096] = 
+    static const uint8_t logtab32[4096] = 
     {
       0x00u,
       0x01u,
