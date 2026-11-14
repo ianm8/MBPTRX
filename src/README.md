@@ -96,3 +96,5 @@
  * 9.3.240 fix CW sidetone
  * 9.4.240 fix sidetone level
  * 9.5.240 FT8 autocal lock
+ * 9.6.240 FT8 autocal shows first attempt
+ * 9.7.240 add narrow band FM
