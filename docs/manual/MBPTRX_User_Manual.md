@@ -1,6 +1,6 @@
 # MBPTRX User Manual
 
-Firmware version 9.5.240
+Firmware version 9.7.240
 
 Copyright 2026 Ian Mitchell VK7IAN. The firmware is licensed under the GNU GPL Version 3.
 
@@ -20,13 +20,14 @@ Copyright 2026 Ian Mitchell VK7IAN. The firmware is licensed under the GNU GPL V
 10. Operating CW
 11. Operating the digital modes (DGL and DGU)
 12. Receiving AM and shortwave (SWL band)
-13. Operating FT8
-14. Hidden features and tips
-15. Settings that are remembered
-16. Messages and fault codes
-17. Appendix A - Band table
-18. Appendix B - Signal connections
-19. Appendix C - Building the firmware
+13. Operating FM
+14. Operating FT8
+15. Hidden features and tips
+16. Settings that are remembered
+17. Messages and fault codes
+18. Appendix A - Band table
+19. Appendix B - Signal connections
+20. Appendix C - Building the firmware
 
 ---
 
@@ -34,13 +35,13 @@ Copyright 2026 Ian Mitchell VK7IAN. The firmware is licensed under the GNU GPL V
 
 MBPTRX is a multi-band HF phasing transceiver built around a Raspberry Pi Pico 2 (RP2350). It covers the amateur bands from 80 m to 10 m, plus a general coverage shortwave receive band.
 
-The receiver uses a Tayloe quadrature sampling detector. The I and Q signals are digitised by an audio ADC and everything after that is done in software: sideband selection by the phasing method, filtering, AGC, noise blanking, notch filtering, noise reduction and the spectrum display. The transmitter works the same way in reverse, generating I and Q in software and driving a quadrature sampling exciter. The local oscillator is an Si5351 with a TCXO reference.
+The receiver uses a Tayloe quadrature sampling detector. The I and Q signals are digitised by an audio ADC and everything after that is done in software: sideband selection by the phasing method, FM demodulation, filtering, AGC, noise blanking, notch filtering, noise reduction and the spectrum display. The transmitter works the same way in reverse, generating I and Q in software and driving a quadrature sampling exciter. The local oscillator is an Si5351 with a TCXO reference.
 
 One processor core runs the signal processing and the other runs the display and controls, so the audio is not interrupted by the user interface.
 
 Main features:
 
-- SSB (LSB and USB), CW, AM receive, VOX-keyed digital modes, and a complete built-in FT8 mode that needs no computer
+- SSB (LSB and USB), CW, narrow-band FM, AM receive, VOX-keyed digital modes, and a complete built-in FT8 mode that needs no computer
 - 240 x 135 colour display with spectrum and waterfall
 - Automatic mode selection by frequency
 - Selectable receive bandwidth, noise blanker, tunable notch filter and noise reduction
@@ -57,7 +58,7 @@ Main features:
 |---|---|
 | Amateur bands | 80, 40, 30, 20, 17, 15, 12 and 10 m |
 | Shortwave band (SWL) | 3.5 to 30 MHz, receive only |
-| Modes | LSB, USB, CWL, CWU, DGL, DGU, FT8, AM (receive only) |
+| Modes | LSB, USB, CWL, CWU, DGL, DGU, FT8, FM, AM (receive only) |
 | Tuning steps | 10 Hz, 100 Hz, 500 Hz, 1 kHz, 5 kHz, 10 kHz, 100 kHz |
 | SSB receive bandwidth | 2000, 2200, 2400, 2600 or 2800 Hz |
 | CW receive filter | 600 to 800 Hz (200 Hz wide, centred on 700 Hz) |
@@ -65,6 +66,7 @@ Main features:
 | CW keying | Gaussian shaped, about 5 ms rise and fall |
 | Digital and FT8 bandwidth | 3000 Hz |
 | SSB transmit bandwidth | 2600 Hz |
+| FM | 2.5 kHz peak deviation, 12 kHz receive channel, 300 to 3000 Hz audio with pre-emphasis and de-emphasis, noise squelch. Simplex only |
 | Spectrum display | About 14 kHz either side of the tuned frequency, with waterfall |
 | CW keyer speed | 10, 15, 20, 25 or 30 WPM |
 | CW decoder range | About 8 to 34 WPM |
@@ -88,7 +90,7 @@ The encoder does almost everything. What it does depends on what the radio is do
 | Menu open | Moves the highlight |
 | Setting the spectrum level | Changes the level |
 | Adjusting the notch | Moves the notch frequency |
-| Transmitting (SSB, CW, DGL, DGU) | Sets the transmit power level |
+| Transmitting (SSB, CW, DGL, DGU, FM) | Sets the transmit power level |
 | FT8 mode | Scrolls through decoded messages |
 
 ### 3.2 Encoder push button
@@ -102,7 +104,7 @@ The encoder does almost everything. What it does depends on what the radio is do
 
 ### 3.3 PTT
 
-The PTT line keys the transmitter in LSB and USB. In CW modes it works as a **straight key** input. It does nothing in the digital modes, FT8 or AM.
+The PTT line keys the transmitter in LSB, USB and FM. In CW modes it works as a **straight key** input. It does nothing in the digital modes, FT8 or AM.
 
 ### 3.4 Paddles
 
@@ -110,11 +112,11 @@ Paddle A sends dits and paddle B sends dahs. They are only active in CWL and CWU
 
 ### 3.5 Microphone input
 
-The microphone input is used for speech in LSB and USB. In DGL and DGU it is the audio input from a computer or other digital mode source, and it also drives the VOX.
+The microphone input is used for speech in LSB, USB and FM. In DGL and DGU it is the audio input from a computer or other digital mode source, and it also drives the VOX.
 
 ### 3.6 LED
 
-The LED on the Pico lights while the radio is transmitting in SSB, the digital modes and FT8, and while the key is down in CW. It also flashes fault codes if the radio fails its power-on self-test (see section 16.3).
+The LED on the Pico lights while the radio is transmitting in SSB, FM, the digital modes and FT8, and while the key is down in CW. It also flashes fault codes if the radio fails its power-on self-test (see section 17.3).
 
 ---
 
@@ -123,12 +125,12 @@ The LED on the Pico lights while the radio is transmitting in SSB, the digital m
 ### 4.1 Start-up sequence
 
 1. The LED lights for one second.
-2. The radio checks its clock and its hardware. If something is missing the LED flashes a fault code and the radio stops (see section 16.3).
+2. The radio checks its clock and its hardware. If something is missing the LED flashes a fault code and the radio stops (see section 17.3).
 3. The MBPTRX splash screen is shown, with the firmware version in the bottom left corner.
 4. Your callsign is shown for two seconds.
 5. The audio is unmuted and the radio starts receiving on 7.100 MHz.
 
-The version is shown as, for example, `V9.5.240`. The last number is the measured processor clock in MHz and should always read 240.
+The version is shown as, for example, `V9.7.240`. The last number is the measured processor clock in MHz and should always read 240.
 
 ### 4.2 First power-on: entering your callsign and grid
 
@@ -150,7 +152,7 @@ The grid screen works the same way, with four cells: two letters (A to R) follow
 
 When both are accepted the radio shows SAVED with your callsign and grid, stores them, and carries on starting up.
 
-To change your callsign later, use **Callsign** in the menu (section 8.19).
+To change your callsign later, use **Callsign** in the menu (section 8.20).
 
 ### 4.3 Transmit lock-out at start-up
 
@@ -183,7 +185,7 @@ Notes:
 |---|---|
 | TX / RX | The active one is white and the other is blue. On the SWL band or in AM both are green, because transmit is not available |
 | Frequency | White on receive, red on transmit, yellow if the PTT and paddles are locked out |
-| Mode box | LSB, USB, CWL, CWU, DGL, DGU or AM |
+| Mode box | LSB, USB, CWL, CWU, DGL, DGU, AM or FM |
 | Band box | Purple for the amateur bands, red for SWL |
 | S-meter | Scale `1 3 5 7 9 +20`. Ten blocks is S9, and up to five more show stronger signals. On transmit it shows the microphone or audio input level |
 | T | Shown when the notch filter is on |
@@ -204,6 +206,7 @@ The status line changes with the mode.
 | LSB, USB | `CESSB:On` or `Off`, `Mic:100%`, `BW:2400Hz`, `NB0` to `NB5` |
 | CWL, CWU | `WPM:20 Level:MED Sidetone:700`, and a boxed `A` or `S` if a CW decoder is on |
 | DGL, DGU | `Vox:On BW:3000Hz CESSB:Off NB:Off` |
+| FM | `Dev:2.5k Mic:100% BW:12kHz SQ2`, with a `*` after the squelch level while the squelch is open |
 | AM | Nothing |
 
 In SSB, the microphone item changes to red, for example `Mic:3P`, when the microphone processor is on. The number is the processor level.
@@ -212,7 +215,7 @@ While you are setting the spectrum level the line reads `Spectrum Level: 6dB`. W
 
 ### 5.2 Popup messages
 
-Some actions show a message in a dark red box in the middle of the screen for five seconds, under a small heading such as `ATTENTION:`. In FT8 mode the box is blue. The messages are listed in section 16.
+Some actions show a message in a dark red box in the middle of the screen for five seconds, under a small heading such as `ATTENTION:`. In FT8 mode the box is blue. The messages are listed in section 17.
 
 ---
 
@@ -245,14 +248,15 @@ The radio starts in **AUTO** mode, where the mode follows the frequency:
 | Anywhere else below 10 MHz | LSB |
 | Anywhere else at 10 MHz and above | USB |
 
-Choosing a specific mode from the **Mode** menu turns AUTO off, and that mode then stays selected wherever you tune and whichever band you choose. Choose **AUTO** from the Mode menu to turn it back on. Leaving FT8 mode also turns AUTO back on.
+AUTO never chooses FM. Choosing a specific mode from the **Mode** menu turns AUTO off, and that mode then stays selected wherever you tune and whichever band you choose. Choose **AUTO** from the Mode menu to turn it back on. Leaving FT8 mode also turns AUTO back on.
 
 | Mode | Use |
 |---|---|
 | LSB, USB | Speech |
 | CWL, CWU | CW, received on the lower or upper side. Swap between them to move interference to the other side of the filter |
 | DGL, DGU | Digital modes with a computer, keyed by VOX |
-| FT8 | Built-in FT8 (section 13) |
+| FT8 | Built-in FT8 (section 14) |
+| FM | Narrow-band FM speech, simplex (section 13) |
 | AM | AM broadcast reception. Receive only |
 
 ---
@@ -301,6 +305,7 @@ The menus are listed here in the order they appear on the radio.
 | DGL, DGU | VOX-keyed digital modes |
 | FT8 | Enters the built-in FT8 mode. Tune to an FT8 frequency on an amateur band first |
 | AM | AM receive |
+| FM | Narrow-band FM (section 13) |
 
 ### 8.4 JNR (noise reduction)
 
@@ -351,7 +356,24 @@ To move the notch later, select **Notch Off** and then **Notch On** again. The n
 
 The notch can only be switched on or off while the radio is in LSB or USB. In other modes the radio shows `Notch: SSB only` and leaves it as it was. The notch only acts on SSB reception.
 
-### 8.8 FT8 Options
+### 8.8 FM Squelch
+
+| Option | Effect |
+|---|---|
+| Level 1 | Opens on the weakest signals, about 2 dB above the noise |
+| Level 2 | Opens about 4 dB above the noise. The setting at switch-on |
+| Level 3 | Opens about 6 dB above the noise |
+| Level 4 | Opens about 8 dB above the noise |
+| Level 5 | Opens only on strong, nearly noise-free signals, about 12 dB above the noise |
+| Off | The audio is never muted |
+
+The squelch mutes the receiver in FM when there is no signal. It measures the noise above the speech band, so it opens on how clean a signal is rather than how strong it is. The figures are the signal to noise ratio in the 12 kHz receive channel.
+
+The squelch closes again only when the noise rises a little above the level that opened it, so it does not chatter on a fading signal. The audio fades in and out over a few milliseconds, so there is no click.
+
+The status line shows the level as `SQ0` to `SQ5` (`SQ0` is Off), followed by a `*` while the squelch is open. The squelch can be set in any mode but only acts in FM. It is not stored, and is always Level 2 at switch-on.
+
+### 8.9 FT8 Options
 
 These options are set **before** entering FT8 mode. The menu is not available inside FT8 mode.
 
@@ -367,9 +389,9 @@ These options are set **before** entering FT8 mode. The menu is not available in
 | Monitor On | FT8 receive audio is heard |
 | Monitor Off | FT8 mode is silent |
 
-See section 13 for how these are used.
+See section 14 for how these are used.
 
-### 8.9 Spectrum
+### 8.10 Spectrum
 
 | Option | Effect |
 |---|---|
@@ -390,15 +412,15 @@ If you press the PTT or a paddle while adjusting, the adjustment is cancelled an
 
 On frequencies above 15 MHz the radio automatically flattens the small hump of noise that would otherwise appear at the centre of the spectrum.
 
-### 8.10 Mic Gain
+### 8.11 Mic Gain
 
 | Option | Effect |
 |---|---|
 | Gain 25% to Gain 200%, in steps of 25% | Sets the microphone gain |
 
-The gain is shown on the SSB status line. Set it so that speech peaks move the microphone level meter well up the scale on transmit without holding it at the top. It applies to LSB and USB only.
+The gain is shown on the SSB and FM status lines. Set it so that speech peaks move the microphone level meter well up the scale on transmit without holding it at the top. It applies to LSB, USB and FM.
 
-### 8.11 Mic Proc (microphone processor)
+### 8.12 Mic Proc (microphone processor)
 
 | Option | Effect |
 |---|---|
@@ -411,7 +433,7 @@ The gain is shown on the SSB status line. Set it so that speech peaks move the m
 
 The processor is a soft clipper that raises the average level of your speech. Higher levels give more punch and more distortion. When it is on, the status line shows the level in red, for example `Mic:3P`. It applies to LSB and USB transmit.
 
-### 8.12 CW Decode
+### 8.13 CW Decode
 
 | Option | Effect |
 |---|---|
@@ -421,13 +443,13 @@ The processor is a soft clipper that raises the average level of your speech. Hi
 
 When a decoder is on in CWL or CWU, decoded text scrolls along the bottom of the screen. A `*` at the end of the line shows when the decoder hears the key down, which helps with tuning. The decoder follows sending speeds from about 8 to 34 WPM. A boxed `A` or `S` on the status line shows which decoder is running.
 
-### 8.13 CW Speed
+### 8.14 CW Speed
 
 | Option | Effect |
 |---|---|
 | 10, 15, 20, 25, 30 WPM | Sets the keyer speed for the paddles |
 
-### 8.14 CW Tone
+### 8.15 CW Tone
 
 | Option | Effect |
 |---|---|
@@ -437,7 +459,7 @@ This sets two things together: the pitch of the transmit sidetone, and the pitch
 
 The CW receive filter is fixed at 600 to 800 Hz, so 700 Hz puts an on-frequency station in the centre of the filter. At 650 or 750 Hz it is about 1 dB down, and at 600 or 800 Hz it is at the edge of the filter and about 3 dB down.
 
-### 8.15 CW Level
+### 8.16 CW Level
 
 | Option | Effect |
 |---|---|
@@ -445,7 +467,7 @@ The CW receive filter is fixed at 600 to 800 Hz, so 700 Hz puts an on-frequency 
 
 Each step is 6 dB. The setting is shown on the CW status line.
 
-### 8.16 CW Keyer
+### 8.17 CW Keyer
 
 | Option | Effect |
 |---|---|
@@ -454,7 +476,7 @@ Each step is 6 dB. The setting is shown on the CW status line.
 
 In both modes a quick tap on the other paddle during an element is remembered and sent next.
 
-### 8.17 Graph SWR
+### 8.18 Graph SWR
 
 | Option | Effect |
 |---|---|
@@ -467,7 +489,7 @@ With **No**, the display shows, for example, `SWR 1.25 PO 5.0` where the tuning 
 
 The power reading holds its peak and decays slowly, so it is easy to read on speech.
 
-### 8.18 CESSB
+### 8.19 CESSB
 
 | Option | Effect |
 |---|---|
@@ -476,7 +498,7 @@ The power reading holds its peak and decays slowly, so it is easy to read on spe
 
 CESSB limits the peaks of the transmitted envelope and then filters the result, which raises average power without splatter. It applies to LSB and USB transmit and can be used together with the microphone processor.
 
-### 8.19 Callsign
+### 8.20 Callsign
 
 | Option | Effect |
 |---|---|
@@ -487,7 +509,7 @@ To change your callsign or grid, choose **..Reboot**. The radio restarts and ask
 
 After **Clear**, FT8 mode is not available until the radio is next switched on and the details are entered again. Selecting FT8 shows `No callsign`.
 
-### 8.20 Exit
+### 8.21 Exit
 
 Closes the menu.
 
@@ -523,7 +545,7 @@ Release the PTT to return to receive. The AGC and S-meter are restored to where 
 
 - There is no number shown for the level. Watch the power reading while you turn.
 - The setting is a drive level, so output power falls faster than the percentage. Half drive gives roughly a quarter of the power.
-- The setting stays until the radio is switched off, and it applies to every mode, including FT8.
+- The setting stays until the radio is switched off, and it applies to every mode, including FM and FT8.
 - The radio always starts at 100%.
 
 ### 9.4 Getting the best transmit audio
@@ -606,11 +628,44 @@ AM mode can also be selected on the amateur bands.
 
 ---
 
-## 13. Operating FT8
+## 13. Operating FM
+
+MBPTRX transmits and receives narrow-band FM with a peak deviation of 2.5 kHz. On HF, FM is mostly found on 10 m, around 29.6 MHz.
+
+### 13.1 Selecting FM
+
+Select **Mode** then **FM**. AUTO never chooses FM, so FM stays selected wherever you tune and whichever band you choose, until you select another mode or AUTO.
+
+- A 5 kHz tuning step suits the FM channels. The 10 m FM simplex calling frequency is 29.600 MHz.
+- Repeater shift and CTCSS tones are not available, so FM is for simplex contacts only.
+- FM can be received on the SWL band, but it cannot transmit there.
+
+### 13.2 Receiving
+
+- The receive channel is 12 kHz wide.
+- There is no AGC in FM. The audio level depends on the other station's deviation, not on its signal strength. The S-meter still shows the signal strength.
+- Stations using wide (5 kHz) deviation are received, but they are louder and can sound distorted.
+- The **FM Squelch** mutes the audio when there is no signal (section 8.8). A `*` after the squelch level on the status line shows that it is open.
+- The receiver tunes 7.8 kHz below the dial frequency, as it does in AM, to keep the signal clear of the noise at the centre of the receiver. On the spectrum the shaded strip that marks the channel therefore sits to the right of centre. The station you are tuned to is in the middle of the strip.
+- JNR, the noise blanker, the Bandwidth setting and the notch filter do not act in FM.
+
+### 13.3 Transmitting
+
+Press and hold the PTT and speak. Release it to return to receive. The paddles do nothing in FM.
+
+- The transmit audio is filtered to 300 to 3000 Hz with pre-emphasis, and the peaks are limited so that the deviation never goes past 2.5 kHz.
+- **Mic Gain** applies in FM. Mic Proc and CESSB do not. More gain cannot over-deviate. It raises the average deviation, like a speech processor, so too much makes your audio sound compressed. Set it as for SSB, so that speech peaks move the microphone level meter well up the scale.
+- FM is a continuous carrier for the whole of each over, so it is sent at the same carrier level as FT8. The output power does not change with your speech.
+- Turn the encoder while transmitting to set the power level, as in the other modes (section 9.3).
+- On transmit the S-meter shows the microphone level, SWR and power are displayed, and the shaded strip on the spectrum is centred on your signal.
+
+---
+
+## 14. Operating FT8
 
 MBPTRX can receive, decode and transmit FT8 by itself. It decodes every 15 second slot, shows the messages, and runs a complete contact for you once you choose a station.
 
-### 13.1 Before you start
+### 14.1 Before you start
 
 1. Make sure your callsign and grid are entered (section 4.2).
 2. Select an amateur band and **tune to the FT8 frequency**. The encoder does not tune once you are in FT8 mode. If the frequency is not inside an amateur band the radio shows `Choose Ham Band` and stays out of FT8.
@@ -631,7 +686,7 @@ Commonly used FT8 frequencies:
 | 12 m | 24.915 |
 | 10 m | 28.074 |
 
-### 13.2 Timing calibration
+### 14.2 Timing calibration
 
 FT8 stations all transmit in 15 second slots that start at 0, 15, 30 and 45 seconds past each minute. The radio has no clock, so it has to find out, or be told, where the slots start. This is the calibration. It is kept until the radio is switched off, even if you leave FT8 mode and come back.
 
@@ -640,11 +695,13 @@ FT8 stations all transmit in 15 second slots that start at 0, 15, 30 and 45 seco
 1. The radio shows `Searching 1/5` and listens for one slot.
 2. If it decodes any signals it adjusts its timing to match them and shows, for example, `Locked +0.12s`. Calibration is complete.
 3. If it decodes nothing it shifts its timing by four seconds and listens again.
-4. After five slots with nothing decoded it shows `No signals found`, and carries on searching.
+4. After five slots with nothing decoded it shows `No signals found`, then starts again from `Searching 1/5`.
 
 **The radio will not transmit until it has locked.** On a dead band you can leave it searching, move to a band with activity, or use manual calibration.
 
-**Trimming the timing.** If the time offsets (DT) of the stations you decode drift away from zero after a long session, leave FT8, select **FT8 Options** then **Auto Cal** (the radio shows `Auto cal enabled`), and enter FT8 again.
+If you leave FT8 while it is still searching, it starts again from `Searching 1/5` when you come back.
+
+**Trimming the timing.** If the time offsets (DT) of the stations you decode drift away from zero after a long session, leave FT8, select **FT8 Options** then **Auto Cal** (the radio shows `Auto cal enabled`), and enter FT8 again. The radio shows `Searching 1/5`.
 
 - The radio trims its timing from the first slot that decodes and shows `Locked`. It does not transmit while it is waiting for that slot.
 - If nothing decodes in five slots it shows `No signals found` and leaves the timing as it was.
@@ -659,7 +716,7 @@ If you do not press the button within a minute the radio leaves FT8 mode.
 
 After **Reset Cal** the radio stays on manual calibration. To go back to automatic, select **Auto Cal** before entering FT8.
 
-### 13.3 The FT8 screen
+### 14.3 The FT8 screen
 
 ```
 +------------------------------------------+
@@ -701,7 +758,7 @@ Colours in the list:
 
 The radio listens for the first 12.6 seconds of each slot and then decodes, which takes a couple of seconds. Signals between 200 and 3000 Hz are decoded, up to 50 messages per slot, and the last 200 messages are kept.
 
-### 13.4 Controls in FT8 mode
+### 14.4 Controls in FT8 mode
 
 | Action | What it does |
 |---|---|
@@ -713,7 +770,7 @@ The radio listens for the first 12.6 seconds of each slot and then decodes, whic
 
 A long press is one second or more, and acts when you release the button. The radio is busy for a couple of seconds at the end of each slot while it decodes. If a press seems to have been missed, press again.
 
-### 13.5 Browsing the messages
+### 14.5 Browsing the messages
 
 Turn the encoder and the list stops updating so you can read it. The cursor starts on the newest message, and the line under it is shown in black on white.
 
@@ -723,7 +780,7 @@ Turn the encoder and the list stops updating so you can read it. The cursor star
 - Messages more than four slots old are shown in grey. The station may have moved on.
 - After ten seconds without input the radio goes back to the live list.
 
-### 13.6 Answering a CQ
+### 14.6 Answering a CQ
 
 1. Turn the encoder to put the cursor on a CQ call.
 2. Short press. The screen changes to show the contact.
@@ -762,7 +819,7 @@ Notes:
 - The radio does not measure the signal report it sends. When you answer a CQ, the report in row 4 is the one the other station gave you, sent back with an R.
 - The radio does not keep a log. Write the contact down.
 
-### 13.7 Calling CQ
+### 14.7 Calling CQ
 
 1. With the live list showing, short press the button. Do this while the green progress bar is moving, so the radio has heard some of the current slot.
 2. The radio looks for a clear frequency between 300 and 2500 Hz and starts calling CQ in the next slot. `CQ` flashes at the top of the screen. For CQ types other than plain CQ, a popup confirms what is being sent.
@@ -794,21 +851,21 @@ Notes:
 
 You can answer anyone who calls you in the same way at any time, whether or not you were calling CQ.
 
-### 13.8 If the other station works someone else
+### 14.8 If the other station works someone else
 
 If the station you are calling answers somebody else, the radio shows `WORKING OTHER:` and the `*` turns red. The message is either `Lost to` and the other callsign, or the other callsign and its audio frequency. `CLASH` is added if that station is transmitting within 60 Hz of you.
 
 You can wait, since the radio keeps calling, or stop with a long press.
 
-### 13.9 Selecting a message that cannot be answered
+### 14.9 Selecting a message that cannot be answered
 
 Only CQ calls and messages addressed to you can be answered. For anything else the radio shows `Not CQ/Your Call`.
 
-### 13.10 Monitoring the audio
+### 14.10 Monitoring the audio
 
 With **Monitor Off** (the setting at switch-on) FT8 mode is silent. With **Monitor On** you hear the band while receiving. Set this from **FT8 Options** before entering FT8 mode.
 
-### 13.11 Leaving FT8 mode
+### 14.11 Leaving FT8 mode
 
 Long press the button. The radio shows `Hold to exit`. Long press again within five seconds, without turning the encoder in between.
 
@@ -816,9 +873,9 @@ The radio returns to the normal screen with the mode on AUTO. The message histor
 
 ---
 
-## 14. Hidden features and tips
+## 15. Hidden features and tips
 
-- **Transmit power.** Turn the encoder while transmitting to set the power level (section 9.3). It works in SSB, CW, DGL and DGU, and the level carries over to FT8.
+- **Transmit power.** Turn the encoder while transmitting to set the power level (section 9.3). It works in SSB, CW, DGL, DGU and FM, and the level carries over to FT8.
 - **Straight key.** In CW modes the PTT line is a straight key input.
 - **Zero beat.** CW Tone sets the sidetone and the receive pitch together, so matching a station to your sidetone puts you on its frequency.
 - **Quick step change.** A short press on the button cycles the tuning step through 100 Hz, 1 kHz and 10 kHz without opening the menu.
@@ -829,6 +886,8 @@ The radio returns to the normal screen with the mode on AUTO. The message histor
 - **Abandoning an adjustment.** Pressing the PTT or a paddle closes the menu. During a spectrum level adjustment it also puts the level back to what it was.
 - **No AGC recovery after transmit.** The AGC level and S-meter reading are saved when you transmit and restored afterwards.
 - **Moving the notch.** Select Notch Off, then Notch On, to tune the notch again.
+- **FM squelch indicator.** In FM, a `*` after the squelch level on the status line shows that the squelch is open.
+- **FM spectrum offset.** In FM receive the channel strip sits to the right of the spectrum centre, because the receiver tunes 7.8 kHz below the dial. On transmit it is centred.
 - **Setting digital drive.** In DGL and DGU the S-meter shows the audio input level on transmit.
 - **FT8 options first.** CQ type, Monitor, power level and calibration options can only be changed before entering FT8 mode.
 - **FT8 calibration persists.** You can leave FT8 to change band and come back without calibrating again.
@@ -839,7 +898,7 @@ The radio returns to the normal screen with the mode on AUTO. The message histor
 
 ---
 
-## 15. Settings that are remembered
+## 16. Settings that are remembered
 
 These settings are stored when they are changed and restored each time the radio is switched on:
 
@@ -866,6 +925,7 @@ These always start from the same state at switch-on:
 | Mode | AUTO |
 | Tuning step | 1 kHz |
 | Noise blanker | Off |
+| FM squelch | Level 2 |
 | Notch filter | Off, 1000 Hz |
 | Microphone processor | Off |
 | CW decoder | Off |
@@ -879,9 +939,9 @@ The audio is muted for a moment while settings are being stored.
 
 ---
 
-## 16. Messages and fault codes
+## 17. Messages and fault codes
 
-### 16.1 Messages on the main screen
+### 17.1 Messages on the main screen
 
 | Heading | Message | Meaning |
 |---|---|---|
@@ -895,13 +955,13 @@ The audio is muted for a moment while settings are being stored.
 | `ERROR:` | `No callsign` | FT8, or Reset Cal, was selected with no callsign and grid stored |
 | `FT8 ERROR:` | `Choose Ham Band` | FT8 was selected on a frequency outside the amateur bands |
 
-### 16.2 Messages in FT8 mode
+### 17.2 Messages in FT8 mode
 
 | Heading | Message | Meaning |
 |---|---|---|
 | `FT8 AUTOCAL:` | `Searching n/5` | Automatic calibration is listening, slot n of 5 |
 | `FT8 AUTOCAL:` | `Locked +0.12s` | Automatic calibration succeeded, with the correction applied |
-| `FT8 AUTOCAL:` | `No signals found` | Nothing was decoded in five slots. A first calibration carries on searching. A trim leaves the timing as it was |
+| `FT8 AUTOCAL:` | `No signals found` | Nothing was decoded in five slots. A first calibration starts again from `Searching 1/5`. A trim leaves the timing as it was |
 | `CALLING:` | `CQ DX`, `CQ WWFF`, `CQ POTA`, `CQ SOTA` | The type of CQ being called |
 | `INFO:` | `No free freq` | No clear frequency was found for a CQ |
 | `RESPONSE:` | A callsign and grid | Someone has answered your CQ |
@@ -914,7 +974,7 @@ The audio is muted for a moment while settings are being stored.
 | `ERROR:` | `Encode failed` | A message could not be built. The contact was stopped |
 | `ERROR:` | `QSO error` | An internal error. The contact was stopped |
 
-### 16.3 Fault codes
+### 17.3 Fault codes
 
 If the power-on self-test fails, the radio stops and the LED flashes a code: a group of short flashes, a one second pause, then the group again.
 
@@ -926,10 +986,13 @@ If the power-on self-test fails, the radio stops and the LED flashes a code: a g
 | 6 | The band-pass filter control port was not found |
 | 7 | The forward power ADC was not found |
 | 8 | The reflected power ADC was not found |
+| 9 | There is not enough memory for the display |
 
 Codes 4 to 8 point to a fault on the I2C bus or with the named part.
 
-### 16.4 Other symptoms
+With code 9 the screen also shows `No RAM for display`, with the free and needed memory in bytes. It points to a firmware build that uses too much memory, not to a hardware fault.
+
+### 17.4 Other symptoms
 
 | Symptom | Likely cause |
 |---|---|
@@ -939,18 +1002,20 @@ Codes 4 to 8 point to a fault on the I2C bus or with the named part.
 | Paddles do nothing | The mode is not CWL or CWU |
 | Low power in every mode | The transmit power level has been turned down (section 9.3) |
 | Encoder will not tune and the menu will not open | The radio is waiting for you to finish a spectrum level or notch adjustment. Press the button |
-| CW station on frequency is a little weak | CW Tone is set to 600 or 800 Hz, at the edge of the CW filter (section 8.14) |
+| CW station on frequency is a little weak | CW Tone is set to 600 or 800 Hz, at the edge of the CW filter (section 8.15) |
 | FT8 will not start, `Choose Ham Band` shown | The frequency is outside the amateur bands |
-| FT8 will not call CQ or answer | Automatic calibration has not locked yet (section 13.2) |
-| No audio in FT8 mode | Monitor is off (section 13.10) |
-| FT8 decodes nothing on a busy band | The manual calibration was mistimed. Reset Cal and calibrate again, or select Auto Cal (section 13.2) |
+| FT8 will not call CQ or answer | Automatic calibration has not locked yet (section 14.2) |
+| No audio in FT8 mode | Monitor is off (section 14.10) |
+| No audio in FM | The squelch is closed. Choose a lower FM Squelch level, or Off (section 8.8) |
+| FM station loud and distorted | The station is using wide (5 kHz) deviation |
+| FT8 decodes nothing on a busy band | The manual calibration was mistimed. Reset Cal and calibrate again, or select Auto Cal (section 14.2) |
 | FT8 stations show a large DT | Timing has drifted. Run Auto Cal again |
 | FT8 shows `No callsign` | The callsign was cleared. Switch off and on, and enter it again |
 | Notch option shows `Notch: SSB only` | Select LSB or USB first |
 
 ---
 
-## 17. Appendix A - Band table
+## 18. Appendix A - Band table
 
 | Band | Tuning range (MHz) | Frequency at switch-on (MHz) |
 |---|---|---|
@@ -984,7 +1049,7 @@ Filters are selected automatically from the frequency:
 
 ---
 
-## 18. Appendix B - Signal connections
+## 19. Appendix B - Signal connections
 
 Pico 2 pin assignments used by the firmware.
 
@@ -1008,7 +1073,7 @@ I2C addresses: low-pass filter control port 0x20, band-pass filter control port 
 
 ---
 
-## 19. Appendix C - Building the firmware
+## 20. Appendix C - Building the firmware
 
 The firmware is built with the Arduino IDE and the Raspberry Pi Pico core, with these settings:
 
@@ -1034,4 +1099,5 @@ Options that can be changed in the source before building:
 |---|---|
 | `PEDESTAL_FILTER` | Flattens the noise hump at the centre of the spectrum above 15 MHz. Remove the line to disable it |
 | `FT8_TX_MAX` | FT8 transmit drive. 127 is the default, 511 is the maximum |
+| `FM_TX_MAX` | FM transmit carrier level, in `fm.h`. 180 is the default and gives the same carrier as FT8. 350 is the maximum |
 | `TCXO_FREQ` | The measured frequency of the reference oscillator, for frequency calibration |
