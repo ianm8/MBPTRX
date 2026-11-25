@@ -317,7 +317,7 @@ namespace DSP
     // quadrature LO = 977 (quadrature: 31250/32/4 = 8)
     // quadrature LO = 488 (quadrature: 31250/64/4 = 16)
     static const uint8_t PI2 = 16u;
-    volatile static uint8_t lo = 0;
+    static uint8_t lo = 0;
     const uint8_t I_index = lo;
     const uint8_t Q_index = lo + PI2;
     const float loI = UTIL::s64[I_index];
@@ -371,7 +371,7 @@ namespace DSP
     // quadrature LO = 977 (quadrature: 31250/32/4 = 8)
     // quadrature LO = 488 (quadrature: 31250/64/4 = 16)
     static const uint8_t PI2 = 16u;
-    volatile static uint8_t lo = 0;
+    static uint8_t lo = 0;
     const uint8_t I_index = lo;
     const uint8_t Q_index = lo + PI2;
     const float loI = UTIL::s64[I_index];
@@ -413,7 +413,7 @@ namespace DSP
     // quadrature LO = 977 (quadrature: 31250/32/4 = 8)
     // quadrature LO = 488 (quadrature: 31250/64/4 = 16)
     static const uint8_t PI2 = 16u;
-    volatile static uint8_t lo = 0;
+    static uint8_t lo = 0;
     const uint8_t I_index = lo;
     const uint8_t Q_index = lo + PI2;
     const float loI = UTIL::s64[I_index];

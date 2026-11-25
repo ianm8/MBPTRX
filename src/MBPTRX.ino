@@ -1,6 +1,6 @@
 /*
  *
- * MBPTRX Version 9.7.240
+ * MBPTRX Version 9.9.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -14,14 +14,18 @@
  *  https://www.arc.id.au/FilterDesign.html
  *
  * Important:
- *   Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI2 whenever the TFT_eSPI2 library is installed
- *   Important Note, there is a bug in version that requires the following change in TFT_eSPI_RP2040.h:
+ *   Copy "User_Setup.h" to  ..\Arduino\libraries\TFT_eSPI2
+ *   whenever the TFT_eSPI2 library is installed
+ *   Important Note, there is a bug in the original
+ *   version that requires the following change in
+ *   TFT_eSPI_RP2040.h:
  *
  *     #define SET_BUS_READ_MODE  // spi_set_format(SPI_X,  8, (spi_cpol_t)0, (spi_cpha_t)0, SPI_MSB_FIRST)
  *
  *   that is, comment out: spi_set_format(SPI_X,  8, (spi_cpol_t)0, (spi_cpha_t)0, SPI_MSB_FIRST)
  *
- * Build:
+ * Bu
+ ild:
  *  Pi Pico 2
  *  CPU Speed: 240Mhz
  *  Optimize: -O3
@@ -115,6 +119,8 @@
  *  9.5.240 FT8 autocal lock
  *  9.6.240 FT8 autocal shows first attempt
  *  9.7.240 add narrow band FM
+ *  9.8.240 small SSB optimisation
+ *  9.9.240 FIR filter optimisation
  */
 
 //#define DEBUGGING_SKIP
@@ -149,6 +155,9 @@
 #include "ArialBold16pt7b.h"
 
 // catch build options where possible
+#if !defined(ARDUINO_PICO_MAJOR) || (ARDUINO_PICO_MAJOR < 6)
+#error "Tools > Board > Boards Manager: update Raspberry Pi Pico/RP2040/RP2350 to 6.x or later"
+#endif
 #ifndef ARDUINO_RASPBERRY_PI_PICO_2
 #error "Tools > Board must be set to 'Raspberry Pi Pico 2'"
 #endif
@@ -169,7 +178,7 @@
 #err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V9.7."
+#define VERSION_STRING "  V9.9."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
