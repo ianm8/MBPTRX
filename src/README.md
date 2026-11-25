@@ -98,3 +98,5 @@
  * 9.5.240 FT8 autocal lock
  * 9.6.240 FT8 autocal shows first attempt
  * 9.7.240 add narrow band FM
+ * 9.8.240 small SSB optimisation
+ * 9.9.240 FIR filter optimisation
