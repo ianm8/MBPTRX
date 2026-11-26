@@ -1,6 +1,6 @@
 # MBPTRX User Manual
 
-Firmware version 9.7.240
+Firmware version 10.3.240
 
 Copyright 2026 Ian Mitchell VK7IAN. The firmware is licensed under the GNU GPL Version 3.
 
@@ -35,7 +35,9 @@ Copyright 2026 Ian Mitchell VK7IAN. The firmware is licensed under the GNU GPL V
 
 MBPTRX is a multi-band HF phasing transceiver built around a Raspberry Pi Pico 2 (RP2350). It covers the amateur bands from 80 m to 10 m, plus a general coverage shortwave receive band.
 
-The receiver uses a Tayloe quadrature sampling detector. The I and Q signals are digitised by an audio ADC and everything after that is done in software: sideband selection by the phasing method, FM demodulation, filtering, AGC, noise blanking, notch filtering, noise reduction and the spectrum display. The transmitter works the same way in reverse, generating I and Q in software and driving a quadrature sampling exciter. The local oscillator is an Si5351 with a TCXO reference.
+The receiver uses a Tayloe quadrature sampling detector. The I and Q signals are digitised at 62.5 kHz by a PCM1808 audio ADC and everything after that is done in software: sideband selection by the phasing method, FM demodulation, filtering, AGC, noise blanking, notch filtering, noise reduction and the spectrum display. The transmitter works the same way in reverse, generating I and Q in software and driving a quadrature sampling exciter. The local oscillator is an Si5351 with a TCXO reference.
+
+On receive the local oscillator runs 15.6 kHz above the dial frequency, and the software moves the signal back again before reducing the sample rate to 31.25 kHz. This keeps the DC offset, hum and low-frequency noise of the detector well away from the signals you are listening to, so every mode, including AM and FM, is tuned exactly on the dial frequency and nothing is lost at the centre of the spectrum.
 
 One processor core runs the signal processing and the other runs the display and controls, so the audio is not interrupted by the user interface.
 
@@ -66,6 +68,7 @@ Main features:
 | CW keying | Gaussian shaped, about 5 ms rise and fall |
 | Digital and FT8 bandwidth | 3000 Hz |
 | SSB transmit bandwidth | 2600 Hz |
+| AM | Receive only. About 7.8 kHz channel, audio to 3 kHz, AGC that follows the carrier |
 | FM | 2.5 kHz peak deviation, 12 kHz receive channel, 300 to 3000 Hz audio with pre-emphasis and de-emphasis, noise squelch. Simplex only |
 | Spectrum display | About 14 kHz either side of the tuned frequency, with waterfall |
 | CW keyer speed | 10, 15, 20, 25 or 30 WPM |
@@ -73,7 +76,7 @@ Main features:
 | Notch filter | 300 to 2600 Hz, about 30 dB deep |
 | AGC | Automatic. Fast attack, about 10 dB per second decay |
 | Power meter | 0 to 10 W bar graph, or a numeric reading |
-| Sample rate | 31250 Hz |
+| Sample rate | 62500 Hz at the ADC, 31250 Hz for the signal processing |
 | Processor | Raspberry Pi Pico 2 at 240 MHz |
 
 ---
@@ -136,7 +139,7 @@ The audio output is driven by an LM4875 amplifier in bridged (BTL) mono. Both ou
 4. Your callsign is shown for two seconds.
 5. The audio is unmuted and the radio starts receiving on 7.100 MHz.
 
-The version is shown as, for example, `V9.7.240`. The last number is the measured processor clock in MHz and should always read 240.
+The version is shown as, for example, `V10.3.240`. The last number is the measured processor clock in MHz and should always read 240.
 
 ### 4.2 First power-on: entering your callsign and grid
 
@@ -221,7 +224,7 @@ While you are setting the spectrum level the line reads `Spectrum Level: 6dB`. W
 
 ### 5.2 Popup messages
 
-Some actions show a message in a dark red box in the middle of the screen for five seconds, under a small heading such as `ATTENTION:`. In FT8 mode the box is blue. The messages are listed in section 17.
+Some actions show a message in a dark red box in the middle of the screen for five seconds, under a small heading such as `ATTENTION:`. The transmit level message (section 9.3) is shown for a second and a half. In FT8 mode the box is blue. The messages are listed in section 17.
 
 ---
 
@@ -416,7 +419,7 @@ Each band has its own level. **Set Level** starts from the saved value and store
 
 If you press the PTT or a paddle while adjusting, the adjustment is cancelled and the previous level is restored.
 
-On frequencies above 15 MHz the radio automatically flattens the small hump of noise that would otherwise appear at the centre of the spectrum.
+The centre of the spectrum is the dial frequency. The display is corrected for the filters in the receiver's detector, so the noise floor is level from one edge to the other.
 
 ### 8.11 Mic Gain
 
@@ -549,7 +552,7 @@ Release the PTT to return to receive. The AGC and S-meter are restored to where 
 
 **While transmitting, turn the encoder to set the power level.** Each click changes the drive by 1%, from 0% to 100%. Turn anticlockwise to reduce power and clockwise to increase it.
 
-- There is no number shown for the level. Watch the power reading while you turn.
+- Each change shows the level in a popup, for example `TX Level: 57%` under the heading `TX INFO:`. The popup is also shown at 0% and 100%, so you can see when you have reached the end of the range.
 - The setting is a drive level, so output power falls faster than the percentage. Half drive gives roughly a quarter of the power.
 - The setting stays until the radio is switched off, and it applies to every mode, including FM and FT8.
 - The radio always starts at 100%.
@@ -594,7 +597,7 @@ In CWL and CWU the **PTT line is a straight key input**. Connect a straight key,
 - The sidetone is heard at the CW Tone pitch and CW Level volume, shaped the same way as the transmitted signal
 - The keying is Gaussian shaped, with a rise and fall time of about 5 ms
 - SWR and power are displayed
-- Turning the encoder sets the power level, as in SSB (section 9.3). This works while keying and during the 0.8 second hang time
+- Turning the encoder sets the power level and shows it in a popup, as in SSB (section 9.3). This works while keying and during the 0.8 second hang time
 
 ### 10.5 CW decoder
 
@@ -627,6 +630,8 @@ Select **SWL** from the Band menu. The radio tunes continuously from 3.5 to 30 M
 
 - A 5 kHz tuning step suits the broadcast bands.
 - JNR can be used to take the edge off noisy signals.
+- The receiver is centred on the dial frequency, and so is the shaded strip on the spectrum. Tune so that the carrier sits in the middle of the strip.
+- The AGC follows the carrier rather than the audio peaks, so the audio level does not pump up and down with the modulation, but still follows slow fading.
 - The band box turns red and TX and RX are both shown in green as a reminder that this band is receive only.
 - You can select another mode from the Mode menu, for example USB to listen to utility stations.
 
@@ -656,7 +661,7 @@ Select **Mode** then **FM**. AUTO never chooses FM, so FM stays selected whereve
 - There is no AGC in FM. The audio level depends on the other station's deviation, not on its signal strength. The S-meter still shows the signal strength.
 - Stations using wide (5 kHz) deviation are received, but they are louder and can sound distorted.
 - The **FM Squelch** mutes the audio when there is no signal (section 8.8). A `*` after the squelch level on the status line shows that it is open.
-- The receiver tunes 7.8 kHz below the dial frequency, as it does in AM, to keep the signal clear of the noise at the centre of the receiver. On the spectrum the shaded strip that marks the channel therefore sits to the right of centre. The station you are tuned to is in the middle of the strip.
+- The receiver is centred on the dial frequency. The shaded strip that marks the channel is centred on the spectrum, with the station you are tuned to in the middle of it.
 - JNR, the noise blanker, the Bandwidth setting and the notch filter do not act in FM.
 
 ### 13.3 Transmitting
@@ -667,7 +672,7 @@ Press and hold the PTT and speak. Release it to return to receive. The paddles d
 - **Mic Gain** applies in FM. Mic Proc and CESSB do not. More gain cannot over-deviate. It raises the average deviation, like a speech processor, so too much makes your audio sound compressed. Set it as for SSB, so that speech peaks move the microphone level meter well up the scale.
 - FM is a continuous carrier for the whole of each over, so it is sent at the same carrier level as FT8. The output power does not change with your speech.
 - Turn the encoder while transmitting to set the power level, as in the other modes (section 9.3).
-- On transmit the S-meter shows the microphone level, SWR and power are displayed, and the shaded strip on the spectrum is centred on your signal.
+- On transmit the S-meter shows the microphone level, and SWR and power are displayed.
 
 ---
 
@@ -885,7 +890,7 @@ The radio returns to the normal screen with the mode on AUTO. The message histor
 
 ## 15. Hidden features and tips
 
-- **Transmit power.** Turn the encoder while transmitting to set the power level (section 9.3). It works in SSB, CW, DGL, DGU and FM, and the level carries over to FT8.
+- **Transmit power.** Turn the encoder while transmitting to set the power level (section 9.3). A popup shows the new level. It works in SSB, CW, DGL, DGU and FM, and the level carries over to FT8.
 - **Straight key.** In CW modes the PTT line is a straight key input.
 - **Zero beat.** CW Tone sets the sidetone and the receive pitch together, so matching a station to your sidetone puts you on its frequency.
 - **Quick step change.** A short press on the button cycles the tuning step through 100 Hz, 1 kHz and 10 kHz without opening the menu.
@@ -897,7 +902,6 @@ The radio returns to the normal screen with the mode on AUTO. The message histor
 - **No AGC recovery after transmit.** The AGC level and S-meter reading are saved when you transmit and restored afterwards.
 - **Moving the notch.** Select Notch Off, then Notch On, to tune the notch again.
 - **FM squelch indicator.** In FM, a `*` after the squelch level on the status line shows that the squelch is open.
-- **FM spectrum offset.** In FM receive the channel strip sits to the right of the spectrum centre, because the receiver tunes 7.8 kHz below the dial. On transmit it is centred.
 - **Setting digital drive.** In DGL and DGU the S-meter shows the audio input level on transmit.
 - **FT8 options first.** CQ type, Monitor, power level and calibration options can only be changed before entering FT8 mode.
 - **FT8 calibration persists.** You can leave FT8 to change band and come back without calibrating again.
@@ -955,6 +959,7 @@ The audio is muted for a moment while settings are being stored.
 
 | Heading | Message | Meaning |
 |---|---|---|
+| `TX INFO:` | `TX Level:` and a percentage | The transmit power level was changed with the encoder (section 9.3) |
 | `ATTENTION:` | `TX unavaliable` | The PTT or a paddle was pressed on the SWL band or in AM mode |
 | `ATTENTION:` | `Notch: SSB only` | The notch was switched in a mode other than LSB or USB |
 | `ATTENTION:` | `Graph SWR` or `Numeric SWR` | The SWR display style was changed |
@@ -990,6 +995,7 @@ If the power-on self-test fails, the radio stops and the LED flashes a code: a g
 
 | Flashes | Fault |
 |---|---|
+| 2 | The audio ADC (PCM1808) interface could not be started, because its clocks cannot be made exactly from the processor clock. The firmware was built with the wrong CPU speed |
 | 3 | The processor clock is not 240 MHz. The firmware was built with the wrong settings |
 | 4 | The Si5351 oscillator was not found |
 | 5 | The low-pass filter control port was not found |
@@ -998,7 +1004,7 @@ If the power-on self-test fails, the radio stops and the LED flashes a code: a g
 | 8 | The reflected power ADC was not found |
 | 9 | There is not enough memory for the display |
 
-Codes 4 to 8 point to a fault on the I2C bus or with the named part.
+Codes 2 and 3 point to a build setting, not a hardware fault. Codes 4 to 8 point to a fault on the I2C bus or with the named part.
 
 With code 9 the screen also shows `No RAM for display`, with the free and needed memory in bytes. It points to a firmware build that uses too much memory, not to a hardware fault.
 
@@ -1081,6 +1087,8 @@ Pico 2 pin assignments used by the firmware.
 
 I2C addresses: low-pass filter control port 0x20, band-pass filter control port 0x21.
 
+The PCM1808 runs as a slave. The Pico generates all of its clocks: a 16 MHz master clock on GPIO 13, and the bit and word clocks for a 62.5 kHz sample rate on GPIO 11 and 12. Firmware 10.1 and later needs no hardware changes from earlier versions.
+
 ---
 
 ## 20. Appendix C - Building the firmware
@@ -1089,17 +1097,18 @@ The firmware is built with the Arduino IDE and the Raspberry Pi Pico core, with 
 
 | Setting | Value |
 |---|---|
+| Core (Boards Manager) | Raspberry Pi Pico/RP2040/RP2350, version 6.x or later |
 | Board | Raspberry Pi Pico 2 |
 | CPU Speed | 240 MHz |
 | Optimize | -O3 |
 | USB Stack | No USB |
 | Flash Size | 4MB (no FS) |
 
-The firmware will not compile if the board, CPU speed, optimisation or USB stack setting is wrong.
+The firmware will not compile if the core is older than version 6, or if the board, CPU speed, optimisation or USB stack setting is wrong. Older cores can build firmware that crashes when settings are saved, so always use the latest core.
 
 Libraries:
 
-- The display uses the TFT_eSPI2 library supplied with the project. Copy `User_Setup.h` into the library folder each time the library is installed.
+- The display uses the TFT_eSPI2 library supplied with the project. Copy `User_Setup.h` into the library folder each time the library is installed. The supplied `User_Setup.h` also turns off the library's warning that `TOUCH_CS` is not defined. The touch screen functions are not used.
 - In `TFT_eSPI_RP2040.h`, the `spi_set_format(...)` call in the `SET_BUS_READ_MODE` definition must be commented out. See the note at the top of the sketch.
 - In `si5351.h`, `SI5351_PLL_VCO_MIN` must be set to 440000000.
 
@@ -1107,7 +1116,8 @@ Options that can be changed in the source before building:
 
 | Option | Purpose |
 |---|---|
-| `PEDESTAL_FILTER` | Flattens the noise hump at the centre of the spectrum above 15 MHz. Remove the line to disable it |
 | `FT8_TX_MAX` | FT8 transmit drive. 127 is the default, 511 is the maximum |
 | `FM_TX_MAX` | FM transmit carrier level, in `fm.h`. 180 is the default and gives the same carrier as FT8. 350 is the maximum |
 | `TCXO_FREQ` | The measured frequency of the reference oscillator, for frequency calibration |
+| `IF_SHIFT` | The receive offset, in `dsp.h`. It is 15625 Hz and should not need changing. If a build receives almost nothing, make it negative |
+| `F_QSD`, `F_AMP` | The corner frequencies of the detector filters, in `spectrum.h`, used to level the spectrum display. They match C86, C88, C96 and C101 at 10 nF and C80 and C89 at 510 pF. Change them if you change those capacitors |
