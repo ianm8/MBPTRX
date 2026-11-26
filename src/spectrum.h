@@ -4469,6 +4469,27 @@ namespace spectrum
     }
   }
 
+  // Power gain that undoes the analog low-pass filters ahead of the PCM1808.
+  // The receive LO is IF_SHIFT (FS/2) above the dial, so display index i is
+  // (1023 - i) * FS/1024 from the LO in the analog stages: 0 Hz at the right
+  // edge, FS at the left edge.
+  //   F_QSD: sampling caps C86, C88, C96, C101 (about 33 kHz)
+  //   F_AMP: R35/C80 and R41/C89 (31.2 kHz)
+  //   G2:    differential gain squared, (1 + 2 * 10k / 1k)^2
+  static inline float __not_in_flash_func(analog_eq)(const int32_t i)
+  {
+    static constexpr float BIN_HZ = (float)SAMPLERATE / 1024.0f;
+    static constexpr float F_QSD = 33000.0f;
+    static constexpr float F_AMP = 31200.0f;
+    static constexpr float G2 = 441.0f;
+    const float f = (float)(1023 - i) * BIN_HZ;
+    const float a = f * (1.0f / F_QSD);
+    const float x = f * (1.0f / F_AMP);
+    const float a2 = a * a;
+    const float x2 = x * x;
+    return (1.0f + a2) * (1.0f + x2) * G2 / (G2 + x2);
+  }
+
   // I/Q spectrum for the display: Hann window, float FFT, 5 bit log magnitude.
   // Float is used throughout so that a large signal cannot overflow at any
   // gain setting.
@@ -4477,32 +4498,15 @@ namespace spectrum
     static float re[FFT_N] = { 0 };
     static float im[FFT_N] = { 0 };
 
-    // ---- DC estimate -----------------------------------------------------
-    // Hann weighted mean of this block. Subtracting it puts an exact null
-    // in the centre bin whatever the size of the ADC offset, on receive or
-    // transmit. Because the weighting is the window itself, a strong signal
-    // away from the centre does not leak into the estimate the way it does
-    // with a plain block mean.
-    int64_t sum1 = 0;
-    int64_t sum2 = 0;
-    int32_t sumw = 0;
-    for (uint32_t i = 0; i < FFT_N; i++)
-    {
-      const int32_t w = window_hanning_1024[i];
-      sum1 += (int32_t)ii[i] * w;
-      sum2 += (int32_t)qq[i] * w;
-      sumw += w;
-    }
-    const float dc1 = (float)sum1 / (float)sumw;
-    const float dc2 = (float)sum2 / (float)sumw;
-
-    // ---- DC removal folded into the window multiply ---------------------
+    // window
+    // no DC removal: the 62.5 kHz front end has moved the analog DC
+    // offset to -15.6 kHz, and the centre bin is now the dial frequency
     const float scale = ldexpf(1.0f, gain) / (32768.0f * (float)FFT_N);
     for (uint32_t i = 0; i < FFT_N; i++)
     {
       const float w = (float)window_hanning_1024[i] * scale;
-      re[i] = ((float)ii[i] - dc1) * w;
-      im[i] = ((float)qq[i] - dc2) * w;
+      re[i] = (float)ii[i] * w;
+      im[i] = (float)qq[i] * w;
     }
 
     // forward, complex FFT
@@ -4512,124 +4516,14 @@ namespace spectrum
     // so that they are in order
     for (int32_t i = 0, j = 511; i < 512; i++, j--)
     {
-      mag[i] = log32((uint32_t)sqrtf(re[j] * re[j] + im[j] * im[j]));
+      const float p = (re[j] * re[j] + im[j] * im[j]) * analog_eq(i);
+      mag[i] = log32((uint32_t)sqrtf(p));
     }
     for (int32_t i = 512, j = 1023; i < 1024; i++, j--)
     {
-      mag[i] = log32((uint32_t)sqrtf(re[j] * re[j] + im[j] * im[j]));
+      const float p = (re[j] * re[j] + im[j] * im[j]) * analog_eq(i);
+      mag[i] = log32((uint32_t)sqrtf(p));
     }
-
-#ifdef PEDESTAL_FILTER
-    if (freq > 15'000'000ul)
-    {
-      // Pedestal filter: brings the noise pedestal around DC down to the
-      // level of the noise just outside it. No cal and no flash.
-      //
-      // Every bin in the pedestal, and in a guard band either side of it,
-      // has a slowly tracked baseline. The baselines are floats in display
-      // counts (12*log10 of the magnitude) taken before the 5 bit log, so
-      // they keep working when the noise floor is below the bottom of the
-      // display. Each baseline tracks the lower quartile of its bin, which
-      // signals that come and go (CW, speech) do not pull up. A pedestal bin
-      // is reduced by the amount its baseline is above the guard baseline.
-      //
-      // display index 511 = bin 0 (DC), 512 = bin -1; pedestal spans ~+/-24 bins
-      static constexpr int32_t  P_LO     = 511 - 24;       // 487
-      static constexpr int32_t  P_HI     = 512 + 24;       // 536
-      static constexpr int32_t  P_GUARD  = 8;              // guard bins each side
-      static constexpr int32_t  T_LO     = P_LO - P_GUARD; // 479, first tracked bin
-      static constexpr int32_t  T_N      = P_HI - P_LO + 1 + 2 * P_GUARD; // 66
-      static constexpr float    P_STEP   = 1.0f / 16.0f;   // baseline step, counts per block
-      static constexpr float    P_MAX    = 15.0f;          // largest reduction, counts
-      static constexpr float    P_MIN    = -48.0f;         // lowest level, counts
-      static constexpr uint32_t P_SETTLE = 32;             // fast blocks after a re-seed
-      static float    base[T_N];
-      static int8_t   last_gain = 127;
-      static uint32_t settle = 0;
-
-      // loop() calls this faster than new blocks arrive, so the same block
-      // usually comes round several times
-      static int64_t last_sum1 = 0;
-      static int64_t last_sum2 = 0;
-      const bool new_block = (sum1 != last_sum1) || (sum2 != last_sum2);
-      last_sum1 = sum1;
-      last_sum2 = sum2;
-
-      // level of every tracked bin, in counts
-      float lin[T_N];
-      float lev[T_N];
-      for (int32_t t = 0; t < T_N; t++)
-      {
-        const int32_t i = T_LO + t;
-        const int32_t j = (i < 512) ? (511 - i) : (1535 - i);
-        const float p = re[j] * re[j] + im[j] * im[j];
-        lin[t] = sqrtf(p);
-        // 6*log10(p) = 12*log10(magnitude)
-        lev[t] = (p > 1.0e-8f) ? (2.605767f * logf(p)) : P_MIN;
-      }
-
-      if (gain != last_gain)                        // re-seed on gain change
-      {
-        last_gain = gain;
-        for (int32_t t = 0; t < T_N; t++)
-        {
-          base[t] = lev[t];
-        }
-        settle = P_SETTLE;
-      }
-
-      // lower quartile tracker: up one step, down three
-      // once per new block, so the rate does not depend on how often
-      // loop() gets here
-      if (new_block)
-      {
-        float step = P_STEP;
-        if (settle > 0)
-        {
-          settle--;
-          step = 4.0f * P_STEP;
-        }
-        for (int32_t t = 0; t < T_N; t++)
-        {
-          if (lev[t] > base[t])
-          {
-            base[t] += step;
-          }
-          else if (lev[t] < base[t])
-          {
-            base[t] -= 3.0f * step;
-          }
-        }
-      }
-
-      // local floor: the lower of the two guard bands, so that a carrier
-      // sitting in one of them does not lift it
-      float floor_lo = 0.0f;
-      float floor_hi = 0.0f;
-      for (int32_t t = 0; t < P_GUARD; t++)
-      {
-        floor_lo += base[t];
-        floor_hi += base[T_N - 1 - t];
-      }
-      const float floor_now = ((floor_lo < floor_hi) ? floor_lo : floor_hi) * (1.0f / (float)P_GUARD);
-
-      for (int32_t t = P_GUARD; t < T_N - P_GUARD; t++)
-      {
-        float ex = base[t] - floor_now;
-        if (ex > P_MAX)
-        {
-          ex = P_MAX;
-        }
-        if (ex > 0.0f)
-        {
-          // 10^(-ex/12)
-          const float m = lin[t] * expf(ex * -0.1918821f);
-          mag[T_LO + t] = log32((uint32_t)m);
-        }
-      }
-    }
-#endif
-
   }
 }
 

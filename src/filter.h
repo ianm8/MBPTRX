@@ -134,6 +134,51 @@ namespace FILTER
   // shared by the receive bandwidth filters
   static fir_state_t<FIR_LENGTH> rx_bw_state = {};
 
+  // --------------------------------------------------------------------------
+  // decimate by 2: 62500 Hz I/Q in, 31250 Hz I/Q out
+  //
+  // 79 tap equiripple half-band (taps at even distance from the centre are
+  // zero, the centre tap is 0.5):
+  //   pass band  0 to 14000 Hz, ripple 0.002 dB (keeps the +/-14 kHz spectrum)
+  //   stop band  17250 Hz up, 72 dB (anything there would alias into +/-14 kHz)
+  //   -6 dB at 15625 Hz, the new Nyquist frequency
+  // Only every second output is needed, so the older sample of each pair is
+  // just stored and the output is worked out on the newer one.
+  // --------------------------------------------------------------------------
+  static const float __not_in_flash("fast_access_sram") h_decim2[20] =
+  {
+    -2.502875577e-04f,
+    3.529259993e-04f,
+    -5.910914624e-04f,
+    9.256473277e-04f,
+    -1.379307709e-03f,
+    1.979785506e-03f,
+    -2.758163260e-03f,
+    3.751148004e-03f,
+    -5.002808291e-03f,
+    6.568363868e-03f,
+    -8.520777337e-03f,
+    1.096141711e-02f,
+    -1.404077560e-02f,
+    1.799872145e-02f,
+    -2.324813418e-02f,
+    3.057101183e-02f,
+    -4.165082797e-02f,
+    6.088185310e-02f,
+    -1.044148132e-01f,
+    3.177436292e-01f
+  };
+
+  static void __not_in_flash_func(decim2_iq)(const float i0, const float q0, const float i1, const float q1, float &i, float &q)
+  {
+    static fir_state_t<(FIR_LENGTH / 2u)> si = {};
+    static fir_state_t<(FIR_LENGTH / 2u)> sq = {};
+    fir_push<(FIR_LENGTH / 2u)>(si, i0);
+    fir_push<(FIR_LENGTH / 2u)>(sq, q0);
+    i = fir_halfband<79u, (FIR_LENGTH / 2u)>(si, i1, h_decim2, 0.5f);
+    q = fir_halfband<79u, (FIR_LENGTH / 2u)>(sq, q1, h_decim2, 0.5f);
+  }
+
   static const float __not_in_flash_func(ma4i)(const float v1)
   {
     static float delay1[MA_FILTER_LENGTH] = { 0 };
@@ -1560,6 +1605,91 @@ namespace FILTER
   {
     static fir_state_t<FIR_LENGTH> s = {};
     return fir_sym<255u, FIR_LENGTH>(s, sample, h_bpf_700f);
+  }
+
+  // AM channel filter (from uDST), one table for I and Q
+  static const float __not_in_flash("fast_access_sram") h_lpf_fs8f[64] =
+  {
+    // 31250 (31248)
+    // 3906 Hz
+    // att: 60dB
+    // 127 taps
+    -0.000073f,
+    -0.000133f,
+    -0.000118f,
+    0.0f,
+    0.000175f,
+    0.000296f,
+    0.000247f,
+    0.0f,
+    -0.000335f,
+    -0.000546f,
+    -0.000442f,
+    0.0f,
+    0.000571f,
+    0.00091f,
+    0.000723f,
+    0.0f,
+    -0.000901f,
+    -0.001417f,
+    -0.00111f,
+    0.0f,
+    0.001352f,
+    0.002102f,
+    0.001631f,
+    0.0f,
+    -0.001951f,
+    -0.003009f,
+    -0.002317f,
+    0.0f,
+    0.002736f,
+    0.004196f,
+    0.003214f,
+    0.0f,
+    -0.003759f,
+    -0.005743f,
+    -0.004383f,
+    0.0f,
+    0.005098f,
+    0.007772f,
+    0.005923f,
+    0.0f,
+    -0.00688f,
+    -0.010491f,
+    -0.008003f,
+    0.0f,
+    0.009337f,
+    0.014289f,
+    0.010952f,
+    0.0f,
+    -0.012952f,
+    -0.020005f,
+    -0.015508f,
+    0.0f,
+    0.018914f,
+    0.02983f,
+    0.023729f,
+    0.0f,
+    -0.03115f,
+    -0.05183f,
+    -0.044294f,
+    0.0f,
+    0.074591f,
+    0.158744f,
+    0.224934f,
+    0.5f * 0.25f  // centre tap, halved
+  };
+
+  static const float __not_in_flash_func(lpf_fs8f_rx1)(const float sample)
+  {
+    static fir_state_t<(FIR_LENGTH / 2u)> s = {};
+    return fir_sym<127u, (FIR_LENGTH / 2u)>(s, sample, h_lpf_fs8f);
+  }
+
+  static const float __not_in_flash_func(lpf_fs8f_rx2)(const float sample)
+  {
+    static fir_state_t<(FIR_LENGTH / 2u)> s = {};
+    return fir_sym<127u, (FIR_LENGTH / 2u)>(s, sample, h_lpf_fs8f);
   }
 
   static const float __not_in_flash("fast_access_sram") h_lpf_fs4f_rx1[64] =

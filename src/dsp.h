@@ -5,8 +5,79 @@
 #include "notch.h"
 #include "util.h"
 
+// I/Q input rate: two PCM1808 frames for every DSP sample
+#define SAMPLERATE_IN (2u * SAMPLERATE)
+
+// The receive LO is moved by IF_SHIFT (SAMPLERATE_IN / 4 = 15625 Hz) and the
+// front end moves the signal back. If nothing is heard after the change,
+// make this negative: it sets both the LO direction and the rotation.
+#define IF_SHIFT ((int32_t)(SAMPLERATE_IN / 4u))
+
 namespace DSP
 {
+  // --------------------------------------------------------------------------
+  // 62.5 kHz I/Q front end
+  //
+  // The receive LO is set IF_SHIFT away from where the rest of the DSP expects
+  // it, so the wanted signal is 15.6 kHz away from the analog DC offset, 1/f
+  // noise and hum of the QSD and op-amps. A quarter turn per sample moves
+  // everything back by SAMPLERATE_IN/4: the signal lands where it always did
+  // and the analog DC lands at the band edge, -15.6 kHz, where the half-band
+  // filter removes it. Every second sample is then dropped.
+  //
+  // In:  two 62.5 kHz frames as read from the PIO (24-bit sample in bits 31..8)
+  // Out: one 31.25 kHz frame in the same format
+  //
+  // Quarter turn per sample, x = i + jq, n = 0, 1, 2, 3 ...
+  //   IF_SHIFT > 0: x * (-j)^n,  n odd gives (q, -i) or (-q, i)
+  //   IF_SHIFT < 0: x * (+j)^n,  n odd gives (-q, i) or (q, -i)
+  // --------------------------------------------------------------------------
+  static void __not_in_flash_func(front_end)(
+    const int32_t i0,
+    const int32_t q0,
+    const int32_t i1,
+    const int32_t q1,
+    int32_t &i,
+    int32_t &q)
+  {
+    static constexpr float ROTATE = (IF_SHIFT > 0) ? 1.0f : -1.0f;
+    static constexpr float OUT_MAX = 2147483520.0f; // largest float below 2^31
+    static float sign = 1.0f;
+
+    // even sample: n = 0 or 2
+    const float a0 = sign * (float)i0;
+    const float b0 = sign * (float)q0;
+
+    // odd sample: n = 1 or 3
+    const float k = ROTATE * sign;
+    const float a1 = k * (float)q1;
+    const float b1 = -k * (float)i1;
+    sign = -sign;
+
+    float fi = 0.0f;
+    float fq = 0.0f;
+    FILTER::decim2_iq(a0, b0, a1, b1, fi, fq);
+
+    if (fi > OUT_MAX)
+    {
+      fi = OUT_MAX;
+    }
+    if (fi < -OUT_MAX)
+    {
+      fi = -OUT_MAX;
+    }
+    if (fq > OUT_MAX)
+    {
+      fq = OUT_MAX;
+    }
+    if (fq < -OUT_MAX)
+    {
+      fq = -OUT_MAX;
+    }
+    i = (int32_t)fi;
+    q = (int32_t)fq;
+  }
+
   static notch_t notch;
   volatile static float agc_peak = 0.0f;
 
@@ -309,21 +380,6 @@ namespace DSP
     const uint8_t bw,
     const uint8_t nb_level)
   {
-    // quadrature mixer
-
-    // quadrature LO = 7812 (quadrature: 31250/4/4 = 1)
-    // quadrature LO = 3906 (quadrature: 31250/8/4 = 2)
-    // quadrature LO = 1953 (quadrature: 31250/16/4 = 4)
-    // quadrature LO = 977 (quadrature: 31250/32/4 = 8)
-    // quadrature LO = 488 (quadrature: 31250/64/4 = 16)
-    static const uint8_t PI2 = 16u;
-    static uint8_t lo = 0;
-    const uint8_t I_index = lo;
-    const uint8_t Q_index = lo + PI2;
-    const float loI = UTIL::s64[I_index];
-    const float loQ = UTIL::s64[Q_index];
-    lo++;
-
     // remove DC
     float ii = FILTER::dc1f((float)in_i / 32768.0f);
     float qq = FILTER::dc2f((float)in_q / 32768.0f);
@@ -331,17 +387,9 @@ namespace DSP
     // noise blanker
     noise_blanker(ii,qq,nb_level);
 
-    // quadrature down-convert
-    const float a = ii * loQ;
-    const float b = qq * loI;
-    const float c = qq * loQ;
-    const float d = ii * loI;
-    const float mxI = a - b;
-    const float mxQ = c + d;
-
     // phase shift IQ +/- 45
-    const float p45 = FILTER::fap1f(mxI);
-    const float n45 = FILTER::fap2f(mxQ);
+    const float p45 = FILTER::fap1f(ii);
+    const float n45 = FILTER::fap2f(qq);
 
     // reject image
     const float ssb = p45 - n45;
@@ -364,35 +412,13 @@ namespace DSP
 
   static const int16_t __not_in_flash_func(process_dig)(const int16_t in_i,const int16_t in_q)
   {
-    // quadrature mixer
-
-    // quadrature LO = 3906 (quadrature: 31250/8/4 = 2)
-    // quadrature LO = 1953 (quadrature: 31250/16/4 = 4)
-    // quadrature LO = 977 (quadrature: 31250/32/4 = 8)
-    // quadrature LO = 488 (quadrature: 31250/64/4 = 16)
-    static const uint8_t PI2 = 16u;
-    static uint8_t lo = 0;
-    const uint8_t I_index = lo;
-    const uint8_t Q_index = lo + PI2;
-    const float loI = UTIL::s64[I_index];
-    const float loQ = UTIL::s64[Q_index];
-    lo++;
-
     // remove DC
-    float ii = FILTER::dc1f((float)in_i / 32768.0f);
-    float qq = FILTER::dc2f((float)in_q / 32768.0f);
-
-    // quadrature down-convert
-    const float a = ii * loQ;
-    const float b = qq * loI;
-    const float c = qq * loQ;
-    const float d = ii * loI;
-    const float mxI = a - b;
-    const float mxQ = c + d;
+    const float ii = FILTER::dc1f((float)in_i / 32768.0f);
+    const float qq = FILTER::dc2f((float)in_q / 32768.0f);
 
     // phase shift IQ +/- 45
-    const float p45 = FILTER::fap1f(mxI);
-    const float n45 = FILTER::fap2f(mxQ);
+    const float p45 = FILTER::fap1f(ii);
+    const float n45 = FILTER::fap2f(qq);
 
     // reject image
     const float ssb = p45 - n45;
@@ -406,35 +432,13 @@ namespace DSP
 
   static const int16_t __not_in_flash_func(process_ft8)(const int16_t in_i,const int16_t in_q,float &ft8_audio)
   {
-    // quadrature mixer
-
-    // quadrature LO = 3906 (quadrature: 31250/8/4 = 2)
-    // quadrature LO = 1953 (quadrature: 31250/16/4 = 4)
-    // quadrature LO = 977 (quadrature: 31250/32/4 = 8)
-    // quadrature LO = 488 (quadrature: 31250/64/4 = 16)
-    static const uint8_t PI2 = 16u;
-    static uint8_t lo = 0;
-    const uint8_t I_index = lo;
-    const uint8_t Q_index = lo + PI2;
-    const float loI = UTIL::s64[I_index];
-    const float loQ = UTIL::s64[Q_index];
-    lo++;
-
     // remove DC
-    float ii = FILTER::dc1f((float)in_i / 32768.0f);
-    float qq = FILTER::dc2f((float)in_q / 32768.0f);
-
-    // quadrature down-convert
-    const float a = ii * loQ;
-    const float b = qq * loI;
-    const float c = qq * loQ;
-    const float d = ii * loI;
-    const float mxI = a - b;
-    const float mxQ = c + d;
+    const float ii = FILTER::dc1f((float)in_i / 32768.0f);
+    const float qq = FILTER::dc2f((float)in_q / 32768.0f);
 
     // phase shift IQ +/- 45
-    const float p45 = FILTER::fap1f(mxI);
-    const float n45 = FILTER::fap2f(mxQ);
+    const float p45 = FILTER::fap1f(ii);
+    const float n45 = FILTER::fap2f(qq);
 
     // reject image
     const float ssb = p45 - n45;
@@ -466,49 +470,65 @@ namespace DSP
     return agc(sig * 32768.0f);
   }
 
-  static const int16_t __not_in_flash_func(process_am)(const int16_t in_i,const int16_t in_q,const uint32_t jnr_level)
+  static const int16_t __not_in_flash_func(process_am)(const int16_t in_i, const int16_t in_q, const uint32_t jnr_level)
   {
-    // BPF I with +45 phase shift
-    // BPF Q with -45 phase shift
-    // SUM (USB)
-    // ABS
-    // AGC
-    // LPF
-    // Remove DC
+    // AM envelope detector at zero IF with carrier-referenced AGC.
+    // The LO is on the dial frequency, so the carrier is at zero. There is no
+    // DC block before the detector: the 62.5 kHz front end has already moved
+    // the analog DC offset to -15.6 kHz, outside the channel filter.
+    // The DC component of the envelope IS the carrier level A, so a slow
+    // LPF of the envelope gives a gain reference that ignores modulation
+    // entirely - no syllabic pumping - while still tracking QSB.
 
     // AGC settings
-    static const float max_gain = 200.0f;
-    static const float k = 0.99996f;
+    static constexpr float max_gain = 100.0f;
 
-    // extract AM signal from USB @ FS/4
-    const float ii = FILTER::bpf_45p((float)in_i / 32768.0f);
-    const float qq = FILTER::bpf_45n((float)in_q / 32768.0f);
-    const float ssb = ii + qq;
-    const float magnitude = fabsf(ssb);
-    const float rectified = ssb * ssb;
+    // one-pole corner ~ alpha*fs/(2*pi)
+    // = ~5 Hz at fs = 31.25 kHz;
+    // scale for your RX sample rate
+    static constexpr float agc_alpha = 0.001f;
 
-    // AGC
-    const float agc_magnitude = magnitude * 32768.0f;
-    if (agc_magnitude > agc_peak)
+    // DAC amplitude at m = 1.0; leaves
+    // ~+28% positive-peak headroom
+    // below the 12-bit limit of 2047
+    static constexpr float target = 1600.0f;
+
+    // carrier level
+    volatile static float agc_carrier = 0.0f;
+
+    // channel filter, pre-detection: two instances of the SAME design
+    // (identical coefficients, separate state per instance)
+    const float ii = FILTER::lpf_fs8f_rx1((float)in_i / 32768.0f);
+    const float qq = FILTER::lpf_fs8f_rx2((float)in_q / 32768.0f);
+
+    // exact envelope at zero IF (single VSQRT.F32 on the RP2350 FPU)
+    const float envelope = sqrtf(ii * ii + qq * qq);
+
+    // carrier tracker: slow one-pole LPF of the envelope. The fmaxf
+    // floor at envelope/2 is a fast-attack guard: a strong signal
+    // appearing suddenly is caught to within 6 dB immediately instead
+    // of blasting through for the LPF settling time. For m <= 1 the
+    // floor never exceeds the true carrier, so it cannot cause pumping;
+    // the slow tracker then converges the last few dB smoothly.
+    const float agc_envelope = envelope * 32768.0f;
+    agc_carrier += (agc_envelope - agc_carrier) * agc_alpha;
+    if (agc_envelope > 4.0f * agc_carrier)
     {
-      agc_peak = agc_magnitude;
+      agc_carrier = agc_envelope * 0.5f;
     }
-    else
-    {
-      agc_peak *= k;
-    }
+    agc_peak = agc_carrier * 4.0f;
 
-    // set maximum gain possible for 12 bit DAC
+    // gain from carrier level: m = 1.0 maps to 'target' at the DAC
     float gain = max_gain;
-    if (agc_peak > 1.0f)
+    if (agc_carrier > 1.0f)
     {
-      gain = 2047.0f / agc_peak;
+      gain = target / agc_carrier;
     }
     gain = fminf(gain, max_gain);
 
-    // extract audio from rectified AM signal
-    const float audio_raw = FILTER::dcf(sqrtf(fabsf(FILTER::lpf_3000f(rectified))));
-    const float audio_out = FILTER::jnr(audio_raw,jnr_level);
+    // carrier removal, audio shaping, noise reduction as before
+    const float audio_raw = FILTER::lpf_3000f(FILTER::dcf(envelope));
+    const float audio_out = FILTER::jnr(audio_raw, jnr_level);
     return (int16_t)(audio_out * 32768.0f * gain);
   }
 

@@ -9,6 +9,8 @@
 //   run without the need to make any more changes for a particular hardware setup!
 //   Note that some sketches are designed for a particular TFT pixel width/height
 
+// quiet TFT_eSPI warnings about touch functions
+#define DISABLE_ALL_LIBRARY_WARNINGS
 
 //#define ST7789_DRIVER      // Full configuration option, define additional parameters below for this display
 #define ST7789_2_DRIVER    // Minimal configuration option, define additional parameters below for this display

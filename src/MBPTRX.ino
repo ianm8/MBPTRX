@@ -1,6 +1,6 @@
 /*
  *
- * MBPTRX Version 9.9.240
+ * MBPTRX Version 10.3.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -24,8 +24,7 @@
  *
  *   that is, comment out: spi_set_format(SPI_X,  8, (spi_cpol_t)0, (spi_cpha_t)0, SPI_MSB_FIRST)
  *
- * Bu
- ild:
+ * Build:
  *  Pi Pico 2
  *  CPU Speed: 240Mhz
  *  Optimize: -O3
@@ -121,19 +120,18 @@
  *  9.7.240 add narrow band FM
  *  9.8.240 small SSB optimisation
  *  9.9.240 FIR filter optimisation
+ *  10.0.240 Move I2S to PIO
+ *  10.1.240 raw sampling @ 62500Hz
+ *  10.2.240 centre AM/FM/SSB
+ *  10.3.240 TX level popup
  */
 
 //#define DEBUGGING_SKIP
-//#define DEBUG_I2S_BACKLOG
-
-// enable to reduce the centre pedestal
-// or disable if not needed or wanted
-#define PEDESTAL_FILTER
-
+        
 #include <SPI.h>
 #include <EEPROM.h>
-#include <I2S.h>
 #include <TFT_eSPI2.h>
+#include "asyncI2S.h"
 #include "util.h"
 #include "si5351.h"
 #include "mcp3021.h"
@@ -175,15 +173,16 @@
 #endif
 
 #if SI5351_PLL_VCO_MIN != 440000000
-#err set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
+#error set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V9.9."
+#define VERSION_STRING "  V10.3."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
 #define VOX_TIMEOUT 250u
 #define POPUP_TIMEOUT 5000u
+#define TX_LEVEL_TIMEOUT 1500u
 #define BAND_80M 0
 #define BAND_40M 1
 #define BAND_30M 2
@@ -348,6 +347,7 @@
 
 static_assert((MAX_ADC_SAMPLES & (MAX_ADC_SAMPLES - 1)) == 0, "MAX_ADC_SAMPLES must be a power of 2");
 
+#define ERROR_I2S      2u
 #define ERROR_SYSCLOCK 3u
 #define ERROR_SI5351   4u
 #define ERROR_LPF      5u
@@ -510,30 +510,25 @@ TCA9534 bpf_port;
 Rotary r = Rotary(PIN_ENCB,PIN_ENCA);
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite lcd = TFT_eSprite(&tft);
-I2S i2s(INPUT);
+AsyncI2S i2s_in(pio1, 0, PIN_DOUT, PIN_BCLK, PIN_MCLK, SAMPLERATE_IN);
 
 auto_init_mutex(rotary_mutex);
 auto_init_mutex(cw_decode_mutex);
+
+// TX level from core 1 to core 0 in one word (atomic)
+// bits 31..8 change count, bits 7..0 level (0 to 100%)
+volatile static uint32_t tx_level_report = 0;
 volatile static int32_t debug_value_1 = 0;
 volatile static int32_t debug_value_2 = 0;
 volatile static uint32_t audio_pwm = 0;
 volatile static uint32_t tx_i_pwm = 0;
 volatile static uint32_t tx_q_pwm = 0;
-volatile static int32_t dac_h = 0;
-volatile static int32_t dac_l = 0;
-volatile static int32_t dac_value_i_p = 0;
-volatile static int32_t dac_value_i_n = 0;
-volatile static int32_t dac_value_q_p = 0;
-volatile static int32_t dac_value_q_n = 0;
-volatile static int16_t adc_value = 0;
-volatile static bool adc_value_ready = false;
 volatile static uint32_t adc_sample_p = 0;
 volatile static uint32_t ft8_sample_p = 0;
 volatile static uint32_t mic_peak_level = 0;
 volatile static int16_t adc_data_i[MAX_ADC_SAMPLES] = {0};
 volatile static int16_t adc_data_q[MAX_ADC_SAMPLES] = {0};
 volatile static float ft8_data[FT8_FFT_SIZE] = {0.0f};
-volatile static float mic_gain = 0.0f;
 volatile static bool dit_latched = false;
 volatile static bool dah_latched = false;
 volatile static bool setup_complete = false;
@@ -691,56 +686,22 @@ static __attribute__((always_inline)) inline void disable_mic(void)
   digitalWrite(PIN_MIC,LOW);
 }
 
-void __not_in_flash_func(adc_interrupt_handler)(void)
-{
-  volatile static uint32_t counter = 0;
-  volatile static uint32_t adc_raw = 0;
-  if (adc_fifo_get_level()<4u)
-  {
-    return;
-  }
-  adc_raw += adc_fifo_get();
-  adc_raw += adc_fifo_get();
-  adc_raw += adc_fifo_get();
-  adc_raw += adc_fifo_get();
-  if (counter==4)
-  {
-    pwm_set_both_levels(audio_pwm,dac_l,dac_h);
-    pwm_set_both_levels(tx_i_pwm,dac_value_i_p,dac_value_i_n);
-    pwm_set_both_levels(tx_q_pwm,dac_value_q_p,dac_value_q_n);
-    adc_value = (int16_t)(adc_raw>>4)-2048;
-    adc_value_ready = true;
-    adc_raw = 0;
-    counter = 0;
-  }
-  counter++;
-}
-
 static void init_adc(void)
 {
   adc_init();
   adc_gpio_init(PIN_MIC);
   adc_select_input(MIC_MUX);
-  adc_fifo_setup(true, false, 4, false, false);
-  adc_fifo_drain();
-  adc_irq_set_enabled(true);
-  irq_set_exclusive_handler(ADC_IRQ_FIFO, adc_interrupt_handler);
-  irq_set_priority(ADC_IRQ_FIFO, PICO_HIGHEST_IRQ_PRIORITY);
-  irq_set_enabled(ADC_IRQ_FIFO, true);
-  adc_run(true);
 }
 
-static void init_i2s(void)
+static __attribute__((always_inline)) inline void adc_start_conversion(void)
 {
-  // Note: LRCLK = BCLK + 1
-  i2s.setDATA(PIN_DOUT);
-  i2s.setBCLK(PIN_BCLK);
-  i2s.setMCLK(PIN_MCLK);
-  i2s.setBitsPerSample(32);
-  i2s.setFrequency(SAMPLERATE);
-  i2s.setMCLKmult(256);
-  i2s.setBuffers(4, 256, 0);
-  i2s.begin();
+  hw_set_bits(&adc_hw->cs, ADC_CS_START_ONCE_BITS);
+}
+
+static __attribute__((always_inline)) inline const int16_t get_adc(void)
+{
+  const uint16_t adc_raw = (uint16_t)adc_hw->result;
+  return (int16_t)adc_raw-2048;
 }
 
 static void save_settings(void)
@@ -882,24 +843,16 @@ static void set_frequency(const uint32_t ft8_offset = 0u)
 {
   volatile static uint32_t old_quadrature_divisor = 0u;
   const uint32_t quadrature_divisor = UTIL::quadrature_divisor(radio.frequency);
-  const int32_t ssboffset = radio.tx_enable?0:488;
   const int32_t cwoffset = radio.tx_enable?0:radio.sidetone;
-  const int32_t fmoffset = radio.tx_enable?0:-(int32_t)(SAMPLERATE/4);
-  int32_t rx_ssboffset = 0;
-  int32_t rx_cwoffsetw = 0;
+  // receive LO offset for the 62.5 kHz front end (see dsp.h)
+  const int32_t ifshift = radio.tx_enable?0:IF_SHIFT;
+  int32_t rx_cwoffset = 0;
   switch (radio.mode)
   {
-    case MODE_LSB: rx_ssboffset = +ssboffset;      break;
-    case MODE_USB: rx_ssboffset = -ssboffset;      break;
-    case MODE_DGL: rx_ssboffset = +ssboffset;      break;
-    case MODE_DGU: rx_ssboffset = -ssboffset;      break;
-    case MODE_FT8: rx_ssboffset = -ssboffset;      break;
-    case MODE_AM:  rx_ssboffset = -(SAMPLERATE/4); break;
-    case MODE_FM:  rx_ssboffset = fmoffset;        break;
-    case MODE_CWL: rx_cwoffsetw = +cwoffset;       break;
-    case MODE_CWU: rx_cwoffsetw = -cwoffset;       break;
+    case MODE_CWL: rx_cwoffset = +cwoffset; break;
+    case MODE_CWU: rx_cwoffset = -cwoffset; break;
   }
-  const uint64_t f = SI5351_FREQ_MULT * (radio.frequency+rx_ssboffset+rx_cwoffsetw) + ft8_offset;
+  const uint64_t f = SI5351_FREQ_MULT * (radio.frequency+rx_cwoffset+ifshift) + ft8_offset;
   const uint64_t p = f * quadrature_divisor;
   SI5351.set_freq_manual(f,p,SI5351_CLK0);
   SI5351.set_freq_manual(f,p,SI5351_CLK1);
@@ -1089,9 +1042,6 @@ void setup(void)
   }
 #endif
 
-  // set up audio ADC (IQ input)
-  init_i2s();
-
   // init LCD
   char sz_version[16] = "";
   char sz_clksys[16] = "";
@@ -1181,6 +1131,10 @@ void setup(void)
 void setup1(void)
 {
   // run DSP on core 1
+  if (!i2s_in.begin())
+  {
+    error_stop(ERROR_I2S);
+  }
   // only go to loop1 when setup() has completed
   while (!setup_complete)
   {
@@ -1854,11 +1808,8 @@ static void show_cw_decode(void)
 static void show_spectrum(void)
 {
   // show the spectrum
-  static const int32_t LSB_OFFSET = -5;
-  static const int32_t USB_OFFSET = +5;
-  static const int32_t AM_OFFSET = +45;
-  // FM channel is 90 pixels wide (11 kHz) centred on FS/4 (64 pixels)
-  static const int32_t FM_OFFSET = +19;
+  static const int32_t LSB_OFFSET = 0;
+  static const int32_t USB_OFFSET = 0;
   if (radio.tx_enable)
   {
     switch (radio.mode)
@@ -1978,17 +1929,21 @@ static void show_spectrum(void)
       }
       case MODE_AM:
       {
-        for (uint32_t x=0;x<40;x++)
+        // AM channel is centred on the dial frequency, +/-3.9 kHz
+        for (uint32_t x=0;x<32;x++)
         {
-          lcd.drawLine(POS_CENTER_RIGHT+x+AM_OFFSET,POS_WATER_Y,POS_CENTER_RIGHT+x+AM_OFFSET,POS_WATER_Y+31,LCD_MODE);
+          lcd.drawLine(POS_CENTER_LEFT-x,POS_WATER_Y,POS_CENTER_LEFT-x,POS_WATER_Y+31,LCD_MODE);
+          lcd.drawLine(POS_CENTER_RIGHT+x,POS_WATER_Y,POS_CENTER_RIGHT+x,POS_WATER_Y+31,LCD_MODE);
         }
         break;
       }
       case MODE_FM:
       {
-        for (uint32_t x=0;x<90;x++)
+        // FM channel is centred on the dial frequency, 90 pixels (11 kHz) wide
+        for (uint32_t x=0;x<45;x++)
         {
-          lcd.drawLine(POS_CENTER_RIGHT+x+FM_OFFSET,POS_WATER_Y,POS_CENTER_RIGHT+x+FM_OFFSET,POS_WATER_Y+31,LCD_MODE);
+          lcd.drawLine(POS_CENTER_LEFT-x,POS_WATER_Y,POS_CENTER_LEFT-x,POS_WATER_Y+31,LCD_MODE);
+          lcd.drawLine(POS_CENTER_RIGHT+x,POS_WATER_Y,POS_CENTER_RIGHT+x,POS_WATER_Y+31,LCD_MODE);
         }
         break;
       }
@@ -2189,7 +2144,7 @@ static char sz_popup[64] = "";
 static char sz_popup_heading[64] = "";
 static uint32_t popup_timeout = 0;
 
-static void set_popup(const char *sz_message,const char *sz_heading = NULL)
+static void set_popup(const char *sz_message,const char *sz_heading = NULL,const uint32_t timeout = POPUP_TIMEOUT)
 {
   if (sz_message)
   {
@@ -2204,7 +2159,7 @@ static void set_popup(const char *sz_message,const char *sz_heading = NULL)
     {
       strcpy(sz_popup_heading,"ATTENTION:");
     }
-    popup_timeout = millis() + POPUP_TIMEOUT;
+    popup_timeout = millis() + timeout;
   }
 }
 
@@ -2237,6 +2192,21 @@ static void show_popup(void)
   lcd.setTextSize(1);
 }
 
+static void show_tx_level(void)
+{
+  // core 1 changes the TX level, core 0 shows it
+  static uint32_t last_report = 0;
+  const uint32_t report = tx_level_report;
+  if (report == last_report)
+  {
+    return;
+  }
+  last_report = report;
+  char sz_level[32] = "";
+  snprintf(sz_level,sizeof(sz_level),"TX Level: %lu%%",report & 0xffu);
+  set_popup(sz_level,"TX INFO:",TX_LEVEL_TIMEOUT);
+}
+
 static void update_display(const uint32_t signal_level = 0u)
 {
   display_clear();
@@ -2255,6 +2225,7 @@ static void update_display(const uint32_t signal_level = 0u)
   show_spectrum();
   show_cw_decode();
   show_menu();
+  show_tx_level();
   show_popup();
   show_debug_value(debug_value_1,debug_value_2);
   display_refresh();
@@ -2416,94 +2387,123 @@ static const option_value_t process_menu(void)
 void __not_in_flash_func(loop1)(void)
 {
   // run DSP on core 1
+  // only core 1 uses these, so they need not be volatile
   static bool tx = false;
   static uint32_t tx_peak_delay = 0;
   static float tx_level = 100.0f;
+  static float mic_gain = 0.0f;
+  static int32_t dac_h = 0;
+  static int32_t dac_l = 0;
+  static int32_t dac_value_i_p = 0;
+  static int32_t dac_value_i_n = 0;
+  static int32_t dac_value_q_p = 0;
+  static int32_t dac_value_q_n = 0;
   if (tx)
   {
     // TX, check if changed to RX
     if (radio.tx_enable)
     {
-      if (adc_value_ready)
+      // two 62.5 kHz frames per DSP sample
+      if (i2s_in.level() < 4u)
       {
-        volatile const uint32_t cpu_start = time_us_32();
-        adc_value_ready = false;
-        if ((radio.mode==MODE_DGL||radio.mode==MODE_DGU) && vox_mic_ready && abs(adc_value)>VOX_LEVEL)
-        {
-          vox_triggered = true;
-        }
-        int16_t tx_i = 0;
-        int16_t tx_q = 0;
-        switch (radio.mode)
-        {
-          case MODE_LSB: DSP::process_mic(adc_value,tx_q,tx_i,mic_gain,radio.micproc,radio.cessb); break;
-          case MODE_USB: DSP::process_mic(adc_value,tx_i,tx_q,mic_gain,radio.micproc,radio.cessb); break;
-          case MODE_DGL: DSP::process_dig(adc_value,tx_q,tx_i);                                    break;
-          case MODE_DGU: DSP::process_dig(adc_value,tx_i,tx_q);                                    break;
-          case MODE_CWL: CW::process_cw(radio.keydown,tx_i,tx_q);                                  break;
-          case MODE_CWU: CW::process_cw(radio.keydown,tx_i,tx_q);                                  break;
-          case MODE_FM:  FM::process_tx(adc_value,tx_i,tx_q,mic_gain);                             break;
-          case MODE_FT8: tx_i = tx_q = FT8_TX_MAX;                                                 break;
-        }
-        tx_i = (int16_t)((float)tx_i * tx_level / 100.0f);
-        tx_q = (int16_t)((float)tx_q * tx_level / 100.0f);
-        tx_i = constrain(tx_i,-512,+511);
-        tx_q = constrain(tx_q,-512,+511);
-        dac_value_i_p = 512+tx_i;
-        dac_value_i_n = 511-tx_i;
-        dac_value_q_p = 512+tx_q;
-        dac_value_q_n = 511-tx_q;
-        adc_data_i[adc_sample_p] = tx_i<<5;
-        adc_data_q[adc_sample_p] = tx_q<<5;
-        adc_sample_p = (adc_sample_p+1) & (MAX_ADC_SAMPLES-1);
-        if (radio.mode==MODE_LSB || radio.mode==MODE_USB ||
-          radio.mode==MODE_DGL || radio.mode==MODE_DGU ||
-          radio.mode==MODE_FM)
-        {
-          if (millis()>tx_peak_delay)
-          {
-            mic_peak_level = DSP::get_mic_peak_level(adc_value);
-          }
-          else
-          {
-            mic_peak_level = 0;
-          }
-        }
-        else if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
-        {
-          // generate the sidetone
-          int32_t dac_audio = CW::sidetone(radio.keydown,radio.cw_phase,radio.cw_level);
-          dac_audio = constrain(dac_audio,-2048l,+2047l);
-          dac_audio += 2048l;
-          dac_h = dac_audio >> 6;
-          dac_l = dac_audio & 0x3f;
-        }
-        if (radio.mode!=MODE_FT8)
-        {
-          // only change TX level in TX mode
-          static int32_t rotary = 0l;
-          switch (r.process())
-          {
-            case DIR_CW:  rotary++; break;
-            case DIR_CCW: rotary--; break;
-          }
-          if (rotary!=0)
-          {
-            // don't hang around if we can't own the mutex immediately
-            // rotary will record any rotations
-            if (mutex_try_enter(&rotary_mutex,0ul))
-            {
-              tx_level += (float)rotary;
-              rotary = 0;
-              mutex_exit(&rotary_mutex);
-              tx_level = constrain(tx_level,0.0f,100.0f);
-            }
-          }
-        }
-        volatile const uint32_t cpu_end = time_us_32();
-        cpu.usage += (cpu_end-cpu_start);
-        cpu.count++;
+        return;
       }
+      int32_t ii = 0;
+      int32_t qq = 0;
+      if (!i2s_in.read(ii, qq))
+      {
+        return;
+      }
+      if (!i2s_in.read(ii, qq))
+      {
+        return;
+      }
+      // just ignore the PCM1808 values
+      const int16_t adc_value = get_adc();
+      adc_start_conversion();
+      pwm_set_both_levels(audio_pwm, dac_l, dac_h);
+      pwm_set_both_levels(tx_i_pwm,dac_value_i_p,dac_value_i_n);
+      pwm_set_both_levels(tx_q_pwm,dac_value_q_p,dac_value_q_n);
+      volatile const uint32_t cpu_start = time_us_32();
+      if ((radio.mode==MODE_DGL||radio.mode==MODE_DGU) && vox_mic_ready && abs(adc_value)>VOX_LEVEL)
+      {
+        vox_triggered = true;
+      }
+      int16_t tx_i = 0;
+      int16_t tx_q = 0;
+      switch (radio.mode)
+      {
+        case MODE_LSB: DSP::process_mic(adc_value,tx_q,tx_i,mic_gain,radio.micproc,radio.cessb); break;
+        case MODE_USB: DSP::process_mic(adc_value,tx_i,tx_q,mic_gain,radio.micproc,radio.cessb); break;
+        case MODE_DGL: DSP::process_dig(adc_value,tx_q,tx_i);                                    break;
+        case MODE_DGU: DSP::process_dig(adc_value,tx_i,tx_q);                                    break;
+        case MODE_CWL: CW::process_cw(radio.keydown,tx_i,tx_q);                                  break;
+        case MODE_CWU: CW::process_cw(radio.keydown,tx_i,tx_q);                                  break;
+        case MODE_FM:  FM::process_tx(adc_value,tx_i,tx_q,mic_gain);                             break;
+        case MODE_FT8: tx_i = tx_q = FT8_TX_MAX;                                                 break;
+      }
+      tx_i = (int16_t)((float)tx_i * tx_level / 100.0f);
+      tx_q = (int16_t)((float)tx_q * tx_level / 100.0f);
+      tx_i = constrain(tx_i,-512,+511);
+      tx_q = constrain(tx_q,-512,+511);
+      dac_value_i_p = 512+tx_i;
+      dac_value_i_n = 511-tx_i;
+      dac_value_q_p = 512+tx_q;
+      dac_value_q_n = 511-tx_q;
+      adc_data_i[adc_sample_p] = tx_i<<5;
+      adc_data_q[adc_sample_p] = tx_q<<5;
+      adc_sample_p = (adc_sample_p+1) & (MAX_ADC_SAMPLES-1);
+      if (radio.mode==MODE_LSB || radio.mode==MODE_USB ||
+        radio.mode==MODE_DGL || radio.mode==MODE_DGU ||
+        radio.mode==MODE_FM)
+      {
+        if (millis()>tx_peak_delay)
+        {
+          mic_peak_level = DSP::get_mic_peak_level(adc_value);
+        }
+        else
+        {
+          mic_peak_level = 0;
+        }
+      }
+      else if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
+      {
+        // generate the sidetone
+        int32_t dac_audio = CW::sidetone(radio.keydown,radio.cw_phase,radio.cw_level);
+        dac_audio = constrain(dac_audio,-2048l,+2047l);
+        dac_audio += 2048l;
+        dac_h = dac_audio >> 6;
+        dac_l = dac_audio & 0x3f;
+      }
+      if (radio.mode!=MODE_FT8)
+      {
+        // only change TX level in TX mode
+        static int32_t rotary = 0l;
+        switch (r.process())
+        {
+          case DIR_CW:  rotary++; break;
+          case DIR_CCW: rotary--; break;
+        }
+        if (rotary!=0)
+        {
+          // don't hang around if we can't own the mutex immediately
+          // rotary will record any rotations
+          if (mutex_try_enter(&rotary_mutex,0ul))
+          {
+            tx_level += (float)rotary;
+            rotary = 0;
+            mutex_exit(&rotary_mutex);
+            tx_level = constrain(tx_level,0.0f,100.0f);
+            // tell core 0, new count and level in one write
+            // reported even at a limit so 0% or 100% shows
+            const uint32_t count = (tx_level_report & 0xffffff00u) + 0x100u;
+            tx_level_report = count | (uint32_t)tx_level;
+          }
+        }
+      }
+      volatile const uint32_t cpu_end = time_us_32();
+      cpu.usage += (cpu_end-cpu_start);
+      cpu.count++;
     }
     else
     {
@@ -2517,6 +2517,9 @@ void __not_in_flash_func(loop1)(void)
         disable_mic();
       }
       // set TX output to zero in receive mode
+      // (the TX PWM is only written in TX now)
+      pwm_set_both_levels(tx_i_pwm,0,0);
+      pwm_set_both_levels(tx_q_pwm,0,0);
       dac_value_i_p = 0;
       dac_value_i_n = 0;
       dac_value_q_p = 0;
@@ -2537,166 +2540,142 @@ void __not_in_flash_func(loop1)(void)
     }
     else
     {
-      if (adc_value_ready)
+      // two 62.5 kHz frames per DSP sample
+      if (i2s_in.level() < 4u)
       {
-        volatile const uint32_t cpu_start = time_us_32();
-        adc_value_ready = false;
-        if ((radio.mode==MODE_DGL||radio.mode==MODE_DGU) && vox_mic_ready && abs(adc_value)>VOX_LEVEL)
-        {
-          vox_triggered = true;
-        }
-        // keep the I2S backlog centred
-        // 4 buffers x 256 words: 1024 bytes per buffer, 8 bytes per frame
-        // after a buffer lands the backlog should be ~1.5 buffers
-        // any excess is left over from a stall (boot, TX, flash write)
-        static constexpr int I2S_FRAME_BYTES = 8;
-        static constexpr int I2S_TRIM_HIGH = 1600;
-        static constexpr int I2S_TRIM_TARGET = 1536;
-        int backlog = i2s.available();
-#ifdef DEBUG_I2S_BACKLOG
-        volatile static uint32_t i2s_overruns = 0;
-        volatile static uint32_t i2s_backlog_max = 0;
-        // peak backlog (before trimming) over each 50ms window
-        if ((uint32_t)backlog>i2s_backlog_max)
-        {
-          i2s_backlog_max = (uint32_t)backlog;
-        }
-        const uint32_t now_us = time_us_32();
-        if (now_us-i2s_backlog_window>=50000ul)
-        {
-          i2s_backlog_window = now_us;
-          debug_value_1 = i2s_backlog_max;
-          i2s_backlog_max = 0;
-        }
-        if (i2s.getOverUnderflow())
-        {
-          i2s_overruns++;
-        }
-        debug_value_2 = i2s_overruns;
-#endif
-        // discard any excess
-        if (backlog>I2S_TRIM_HIGH)
-        {
-          while (backlog>I2S_TRIM_TARGET)
-          {
-            int32_t drop_i = 0;
-            int32_t drop_q = 0;
-            i2s.read32(&drop_i,&drop_q);
-            backlog -= I2S_FRAME_BYTES;
-          }
-        }
-        if (i2s.available())
-        {
-          int32_t ii = 0;
-          int32_t qq = 0;
-          i2s.read32(&ii, &qq);
-          // FM uses all 24 bits from the ADC
-          const int32_t ii24 = ii >> 8;
-          const int32_t qq24 = qq >> 8;
-          ii >>= 16;
-          qq >>= 16;
-          adc_data_i[adc_sample_p] = (int16_t)ii;
-          adc_data_q[adc_sample_p] = (int16_t)qq;
-          adc_sample_p = (adc_sample_p+1) & (MAX_ADC_SAMPLES-1);
-          int32_t dac_audio = 0;
-          float ft8_audio = 0.0f;
-          float cwsig = 0.0f;
-          const uint8_t jnr = radio.jnrlevel;
-          const uint8_t nb = radio.nblevel;
-          const uint8_t bw = radio.bandwidth - 1;
-          const uint32_t sqelch = radio.squelch;
-          switch (radio.mode)
-          {
-            case MODE_LSB: dac_audio = DSP::process_ssb(qq,ii,jnr,bw,nb); break;
-            case MODE_USB: dac_audio = DSP::process_ssb(ii,qq,jnr,bw,nb); break;
-            case MODE_AM:  dac_audio = DSP::process_am(ii,qq,jnr);        break;
-            case MODE_CWL: dac_audio = DSP::process_cw(qq,ii,cwsig);      break;
-            case MODE_CWU: dac_audio = DSP::process_cw(ii,qq,cwsig);      break;
-            case MODE_DGL: dac_audio = DSP::process_dig(qq,ii);           break;
-            case MODE_DGU: dac_audio = DSP::process_dig(ii,qq);           break;
-            case MODE_FT8: dac_audio = DSP::process_ft8(ii,qq,ft8_audio); break;
-            case MODE_FM:  dac_audio = FM::process_rx(ii24,qq24,sqelch);  break;
-          }
-          if (radio.mode==MODE_FT8)
-          {
-            dac_audio = radio.ft8_monitor?dac_audio:0;
-            volatile static struct {uint32_t c : 2; } downsample = { 0 };
-            if (downsample.c == 0)
-            {
-              // note, ft8_data is two buffers of FT8_FFT_SIZE/2 values
-              ft8_data[ft8_sample_p] = ft8_audio;
-              ft8_sample_p = (ft8_sample_p + 1) % FT8_FFT_SIZE;
-            }
-            downsample.c++;
-          }
-          dac_audio = constrain(dac_audio,-2048l,+2047l);
-          dac_audio += 2048l;
-          dac_h = dac_audio >> 6;
-          dac_l = dac_audio & 0x3f;
-          if (radio.cwdecode!=0)
-          {
-            if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
-            {
-              static bool last_key_down = false;
-              const uint8_t raw = radio.cwdecode==1?
-                CWDECODE1::morse_decode(cwsig):
-                CWDECODE2::morse_decode(cwsig);
-              const bool cw_key_down = raw&0x80?true:false;
-              const char raw_char = raw & 0x7f;
-              if (cw_key_down != last_key_down || raw_char!='\0')
-              {
-                last_key_down = cw_key_down;
-                mutex_enter_blocking(&cw_decode_mutex);
-                cw_decode_buf[20] = '\0';
-                cw_decode_buf[19] = cw_key_down?'*':' ';
-                if (raw_char!='\0')
-                {
-                  for (uint8_t i=0;i<18;i++)
-                  {
-                    const char c = cw_decode_buf[i+1];
-                    cw_decode_buf[i] = (c=='\0'?' ':c);
-                  }
-                  cw_decode_buf[18] = raw_char;
-                }
-                mutex_exit(&cw_decode_mutex);
-              }
-            }
-            else
-            {
-              CWDECODE1::md1_initialised = 0;
-              CWDECODE2::md2_initialised = 0;
-              memset((char*)cw_decode_buf,0,sizeof(cw_decode_buf));
-            }
-          }
-          else
-          {
-            CWDECODE1::md1_initialised = 0;
-            CWDECODE2::md2_initialised = 0;
-            memset((char*)cw_decode_buf,0,sizeof(cw_decode_buf));
-          }
-        }
-        // only process tune in receive mode
-        static int32_t rotary = 0l;
-        switch (r.process())
-        {
-          case DIR_CW:  rotary++; break;
-          case DIR_CCW: rotary--; break;
-        }
-        if (rotary!=0)
-        {
-          // don't hang around if we can't own the mutex immediately
-          // rotary will record any rotations
-          if (mutex_try_enter(&rotary_mutex,0ul))
-          {
-            radio.tune += rotary;
-            rotary = 0;
-            mutex_exit(&rotary_mutex);
-          }
-        }
-        volatile const uint32_t cpu_end = time_us_32();
-        cpu.usage += (cpu_end-cpu_start);
-        cpu.count++;
+        return;
       }
+      int32_t i0 = 0;
+      int32_t q0 = 0;
+      int32_t i1 = 0;
+      int32_t q1 = 0;
+      if (!i2s_in.read(i0, q0))
+      {
+        return;
+      }
+      if (!i2s_in.read(i1, q1))
+      {
+        return;
+      }
+      volatile const uint32_t cpu_start = time_us_32();
+      // shift by 15.6 kHz and decimate to 31.25 kHz
+      int32_t ii = 0;
+      int32_t qq = 0;
+      DSP::front_end(i0, q0, i1, q1, ii, qq);
+      pwm_set_both_levels(audio_pwm, dac_l, dac_h);
+      // need Mic for VOX
+      const int16_t adc_value = get_adc();
+      adc_start_conversion();
+      if ((radio.mode==MODE_DGL||radio.mode==MODE_DGU) && vox_mic_ready && abs(adc_value)>VOX_LEVEL)
+      {
+        vox_triggered = true;
+      }
+
+      // FM uses all 24 bits from the ADC
+      const int32_t ii24 = ii >> 8;
+      const int32_t qq24 = qq >> 8;
+      ii >>= 16;
+      qq >>= 16;
+      adc_data_i[adc_sample_p] = (int16_t)ii;
+      adc_data_q[adc_sample_p] = (int16_t)qq;
+      adc_sample_p = (adc_sample_p+1) & (MAX_ADC_SAMPLES-1);
+      int32_t dac_audio = 0;
+      float ft8_audio = 0.0f;
+      float cwsig = 0.0f;
+      const uint8_t jnr = radio.jnrlevel;
+      const uint8_t nb = radio.nblevel;
+      const uint8_t bw = radio.bandwidth - 1;
+      const uint32_t sqelch = radio.squelch;
+      switch (radio.mode)
+      {
+        case MODE_LSB: dac_audio = DSP::process_ssb(qq,ii,jnr,bw,nb); break;
+        case MODE_USB: dac_audio = DSP::process_ssb(ii,qq,jnr,bw,nb); break;
+        case MODE_AM:  dac_audio = DSP::process_am(ii,qq,jnr);        break;
+        case MODE_CWL: dac_audio = DSP::process_cw(qq,ii,cwsig);      break;
+        case MODE_CWU: dac_audio = DSP::process_cw(ii,qq,cwsig);      break;
+        case MODE_DGL: dac_audio = DSP::process_dig(qq,ii);           break;
+        case MODE_DGU: dac_audio = DSP::process_dig(ii,qq);           break;
+        case MODE_FT8: dac_audio = DSP::process_ft8(ii,qq,ft8_audio); break;
+        case MODE_FM:  dac_audio = FM::process_rx(ii24,qq24,sqelch);  break;
+      }
+      if (radio.mode==MODE_FT8)
+      {
+        dac_audio = radio.ft8_monitor?dac_audio:0;
+        volatile static struct {uint32_t c : 2; } downsample = { 0 };
+        if (downsample.c == 0)
+        {
+          // note, ft8_data is two buffers of FT8_FFT_SIZE/2 values
+          ft8_data[ft8_sample_p] = ft8_audio;
+          ft8_sample_p = (ft8_sample_p + 1) % FT8_FFT_SIZE;
+        }
+        downsample.c++;
+      }
+      dac_audio = constrain(dac_audio,-2048l,+2047l);
+      dac_audio += 2048l;
+      dac_h = dac_audio >> 6;
+      dac_l = dac_audio & 0x3f;
+      if (radio.cwdecode!=0)
+      {
+        if (radio.mode==MODE_CWL || radio.mode==MODE_CWU)
+        {
+          static bool last_key_down = false;
+          const uint8_t raw = radio.cwdecode==1?
+            CWDECODE1::morse_decode(cwsig):
+            CWDECODE2::morse_decode(cwsig);
+          const bool cw_key_down = raw&0x80?true:false;
+          const char raw_char = raw & 0x7f;
+          if (cw_key_down != last_key_down || raw_char!='\0')
+          {
+            last_key_down = cw_key_down;
+            mutex_enter_blocking(&cw_decode_mutex);
+            cw_decode_buf[20] = '\0';
+            cw_decode_buf[19] = cw_key_down?'*':' ';
+            if (raw_char!='\0')
+            {
+              for (uint8_t i=0;i<18;i++)
+              {
+                const char c = cw_decode_buf[i+1];
+                cw_decode_buf[i] = (c=='\0'?' ':c);
+              }
+              cw_decode_buf[18] = raw_char;
+            }
+            mutex_exit(&cw_decode_mutex);
+          }
+        }
+        else
+        {
+          CWDECODE1::md1_initialised = 0;
+          CWDECODE2::md2_initialised = 0;
+          memset((char*)cw_decode_buf,0,sizeof(cw_decode_buf));
+        }
+      }
+      else
+      {
+        CWDECODE1::md1_initialised = 0;
+        CWDECODE2::md2_initialised = 0;
+        memset((char*)cw_decode_buf,0,sizeof(cw_decode_buf));
+      }
+      // only process tune in receive mode
+      static int32_t rotary = 0l;
+      switch (r.process())
+      {
+        case DIR_CW:  rotary++; break;
+        case DIR_CCW: rotary--; break;
+      }
+      if (rotary!=0)
+      {
+        // don't hang around if we can't own the mutex immediately
+        // rotary will record any rotations
+        if (mutex_try_enter(&rotary_mutex,0ul))
+        {
+          radio.tune += rotary;
+          rotary = 0;
+          mutex_exit(&rotary_mutex);
+        }
+      }
+      volatile const uint32_t cpu_end = time_us_32();
+      cpu.usage += (cpu_end-cpu_start);
+      cpu.count++;
     }
   }
 }

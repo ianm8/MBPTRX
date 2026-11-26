@@ -13,13 +13,15 @@
 //    I and Q are the full 24 bit ADC samples (not the 16 bits the other
 //    modes use) so signals below one 16 bit step are not lost.
 //
-//    The LO is set FS/4 below the dial frequency, exactly as for AM, so the
-//    channel sits at 7812.5 Hz, clear of the DC offset and the 1/f pedestal
-//    at the centre of the baseband. With (I + jQ) as passed here a signal
-//    above the LO appears at a NEGATIVE frequency, so the channel is at
-//    -FS/4 and is shifted to zero by multiplying by j^n (no multiplies).
+//    The LO is on the dial frequency, exactly as for AM, so the channel is
+//    centred on zero. With (I + jQ) as passed here a signal above the LO
+//    appears at a NEGATIVE frequency.
 //
-//      DC block -> shift by FS/4 -> 95 tap channel filter on I and on Q
+//    There is no DC block. A DC block would notch the carrier, and the
+//    62.5 kHz front end (DSP::front_end) has already moved the analog DC
+//    offset and 1/f noise to -15.6 kHz, well outside the channel.
+//
+//      95 tap channel filter on I and on Q
 //      -> phase difference discriminator -> noise squelch
 //      -> de-emphasis -> 300 Hz HPF -> 3000 Hz LPF
 //
@@ -128,10 +130,10 @@ namespace FM
   // LPF: -6dB at 6100 Hz, flat to 5500 Hz
   // att: 65dB from 7000 Hz
   // 95 taps
+  // fir_sym() table: taps 0 to 47 of 95, centre tap halved
   static constexpr uint32_t CHAN_TAPS = 95u;
   static constexpr uint32_t CHAN_LEN = 128u;
-  static constexpr uint32_t CHAN_MASK = CHAN_LEN - 1u;
-  static const float __not_in_flash("fast_access_sram") chan_fir[CHAN_TAPS] =
+  static const float __not_in_flash("fast_access_sram") chan_fir[48] =
   {
     1.005125898e-04f,
     -2.103085340e-05f,
@@ -180,61 +182,12 @@ namespace FM
     -5.376693744e-02f,
     1.006547037e-01f,
     2.992724971e-01f,
-    3.904104917e-01f,
-    2.992724971e-01f,
-    1.006547037e-01f,
-    -5.376693744e-02f,
-    -7.659395987e-02f,
-    -9.278155374e-03f,
-    4.468469524e-02f,
-    3.188647772e-02f,
-    -1.389228253e-02f,
-    -3.201045612e-02f,
-    -8.367059122e-03f,
-    1.992378094e-02f,
-    1.858393520e-02f,
-    -4.654058625e-03f,
-    -1.774342300e-02f,
-    -7.018957939e-03f,
-    1.011606532e-02f,
-    1.186768164e-02f,
-    -1.005722031e-03f,
-    -1.028321545e-02f,
-    -5.445821011e-03f,
-    5.053767115e-03f,
-    7.499065965e-03f,
-    4.583369107e-04f,
-    -5.784004620e-03f,
-    -3.870641931e-03f,
-    2.302484127e-03f,
-    4.478570445e-03f,
-    8.620117646e-04f,
-    -3.021145857e-03f,
-    -2.480404859e-03f,
-    8.788572339e-04f,
-    2.438612462e-03f,
-    7.644849316e-04f,
-    -1.403225068e-03f,
-    -1.393473906e-03f,
-    2.340112735e-04f,
-    1.156637234e-03f,
-    4.921729547e-04f,
-    -5.434331277e-04f,
-    -6.484532952e-04f,
-    1.146561763e-05f,
-    4.381906765e-04f,
-    2.284864630e-04f,
-    -1.525123270e-04f,
-    -2.143761285e-04f,
-    -2.103085340e-05f,
-    1.005125898e-04f
+    3.904104917e-01f * 0.5f // centre tap, halved
   };
 
   static const int16_t __not_in_flash_func(process_rx)(const int32_t in_i, const int32_t in_q, const uint8_t squelch_level)
   {
-    // input is 24 bits
-    // remove DC
-    // shift the channel from -FS/4 to zero
+    // input is 24 bits, channel centred on zero
     // channel filter I and Q
     // discriminator
     // squelch
@@ -246,7 +199,7 @@ namespace FM
     // (opens at about 2, 4, 6, 8 and 12 dB carrier to noise)
     static const float squelch_threshold[6] =
     {
-      0.0f,  // 0 - squelch off
+      0.0f,   // 0 - squelch off
       0.28f, // 1 - opens on the weakest signals
       0.20f, // 2
       0.14f, // 3
@@ -266,14 +219,8 @@ namespace FM
     // S meter decay, about 10dB per second (same as the AGC)
     static const float level_decay = 0.99996f;
 
-    static float buf_i[CHAN_LEN] = { 0.0f };
-    static float buf_q[CHAN_LEN] = { 0.0f };
-    static uint32_t buf_p = 0;
-    static uint32_t rotate = 0;
-    static float dc_xi = 0.0f;
-    static float dc_yi = 0.0f;
-    static float dc_xq = 0.0f;
-    static float dc_yq = 0.0f;
+    static FILTER::fir_state_t<CHAN_LEN> chan_i = {};
+    static FILTER::fir_state_t<CHAN_LEN> chan_q = {};
     static float last_i = 0.0f;
     static float last_q = 0.0f;
     static float deemph = 0.0f;
@@ -290,60 +237,14 @@ namespace FM
     static biquad_t lp1 = { 0.004196993f, 0.008393985f, 0.004196993f, -1.080688917f, 0.312260037f, 0.0f, 0.0f };
     static biquad_t lp2 = { 1.0f, 2.0f, 1.0f, -1.353287542f, 0.643271373f, 0.0f, 0.0f };
 
-    // remove DC, the offset would land on FS/4 after the shift
-    const float xi = (float)in_i * (1.0f / 8388608.0f);
-    const float xq = (float)in_q * (1.0f / 8388608.0f);
-    dc_yi = xi - dc_xi + 0.995f * dc_yi;
-    dc_xi = xi;
-    dc_yq = xq - dc_xq + 0.995f * dc_yq;
-    dc_xq = xq;
-
-    // shift up by FS/4: multiply (I + jQ) by 1, j, -1, -j
-    float si = 0.0f;
-    float sq = 0.0f;
-    switch (rotate)
-    {
-      case 0:
-      {
-        si = dc_yi;
-        sq = dc_yq;
-        break;
-      }
-      case 1:
-      {
-        si = -dc_yq;
-        sq = dc_yi;
-        break;
-      }
-      case 2:
-      {
-        si = -dc_yi;
-        sq = -dc_yq;
-        break;
-      }
-      default:
-      {
-        si = dc_yq;
-        sq = -dc_yi;
-        break;
-      }
-    }
-    rotate = (rotate + 1u) & 3u;
+    // 24 bits to +/-1.0
+    // no DC block, it would notch the centred carrier
+    const float si = (float)in_i * (1.0f / 8388608.0f);
+    const float sq = (float)in_q * (1.0f / 8388608.0f);
 
     // channel filter
-    buf_p = (buf_p - 1u) & CHAN_MASK;
-    buf_i[buf_p] = si;
-    buf_q[buf_p] = sq;
-    float zi = 0.0f;
-    float zq = 0.0f;
-    uint32_t p = buf_p;
-    for (uint32_t k = 0u; k < CHAN_TAPS; k++)
-    {
-      const float h = chan_fir[k];
-      zi += h * buf_i[p];
-      zq += h * buf_q[p];
-      p = (p + 1u) & CHAN_MASK;
-    }
+    const float zi = FILTER::fir_sym<CHAN_TAPS, CHAN_LEN>(chan_i, si, chan_fir);
+    const float zq = FILTER::fir_sym<CHAN_TAPS, CHAN_LEN>(chan_q, sq, chan_fir);
 
     // signal level for the S meter
     // in 16 bit units, times 2 to match the level the other modes give
