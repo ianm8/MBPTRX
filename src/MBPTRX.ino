@@ -1,6 +1,6 @@
 /*
  *
- * MBPTRX Version 10.3.240
+ * MBPTRX Version 10.4.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -124,6 +124,7 @@
  *  10.1.240 raw sampling @ 62500Hz
  *  10.2.240 centre AM/FM/SSB
  *  10.3.240 TX level popup
+ *  10.4.240 fix tiny DC spike
  */
 
 //#define DEBUGGING_SKIP
@@ -176,7 +177,7 @@
 #error set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V10.3."
+#define VERSION_STRING "  V10.4."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -2558,11 +2559,11 @@ void __not_in_flash_func(loop1)(void)
         return;
       }
       volatile const uint32_t cpu_start = time_us_32();
+      pwm_set_both_levels(audio_pwm, dac_l, dac_h);
       // shift by 15.6 kHz and decimate to 31.25 kHz
       int32_t ii = 0;
       int32_t qq = 0;
       DSP::front_end(i0, q0, i1, q1, ii, qq);
-      pwm_set_both_levels(audio_pwm, dac_l, dac_h);
       // need Mic for VOX
       const int16_t adc_value = get_adc();
       adc_start_conversion();
@@ -2570,12 +2571,22 @@ void __not_in_flash_func(loop1)(void)
       {
         vox_triggered = true;
       }
-
+      // round to nearest, not down: a plain >> adds -0.5 LSB of DC,
+      // which now sits on the dial frequency (centre of the spectrum)
       // FM uses all 24 bits from the ADC
-      const int32_t ii24 = ii >> 8;
-      const int32_t qq24 = qq >> 8;
-      ii >>= 16;
-      qq >>= 16;
+      const int32_t ii24 = (ii >> 8) + ((ii >> 7) & 1);
+      const int32_t qq24 = (qq >> 8) + ((qq >> 7) & 1);
+      ii = (ii >> 16) + ((ii >> 15) & 1);
+      qq = (qq >> 16) + ((qq >> 15) & 1);
+      // rounding can reach 32768 at full scale
+      if (ii > 32767)
+      {
+        ii = 32767;
+      }
+      if (qq > 32767)
+      {
+        qq = 32767;
+      }      
       adc_data_i[adc_sample_p] = (int16_t)ii;
       adc_data_q[adc_sample_p] = (int16_t)qq;
       adc_sample_p = (adc_sample_p+1) & (MAX_ADC_SAMPLES-1);
