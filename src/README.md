@@ -98,14 +98,3 @@
  * 9.5.240 FT8 autocal lock
  * 9.6.240 FT8 autocal shows first attempt
  * 9.7.240 add narrow band FM
- * 9.8.240 small SSB optimisation
- * 9.9.240 FIR filter optimisation
- * 10.0.240 Move I2S to PIO
- * 10.1.240 raw sampling @ 62500Hz
- * 10.2.240 centre AM/FM/SSB
- * 10.3.240 TX level popup
- * 10.4.240 fix tiny DC spike
- * 10.5.240 FT8 buffer processing
- * 10.6.240 FT8 CQ issue fixed
- * 10.7.240 SI5351 tuning improvement
- * 10.8.240 birdie removal

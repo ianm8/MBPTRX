@@ -201,24 +201,6 @@ menu_options[NUM_MENU_ITEMS] =
     }
   },
   {
-    MENU_STEP,
-    "Step",
-    8U,
-    {
-      {OPTION_STEP_10,"10"},
-      {OPTION_STEP_100,"100"},
-      {OPTION_STEP_500,"500"},
-      {OPTION_STEP_1000,"1000"},
-      {OPTION_STEP_5000,"5000"},
-      {OPTION_STEP_10000,"10000"},
-      {OPTION_STEP_100000,"100000"},
-      {OPTION_EXIT,"Exit"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"},
-      {OPTION_NONE,"None"}
-    }
-  },
-  {
     MENU_MODE,
     "Mode",
     11U,
@@ -234,6 +216,24 @@ menu_options[NUM_MENU_ITEMS] =
       {OPTION_MODE_AM,"AM"},
       {OPTION_MODE_FM,"FM"},
       {OPTION_EXIT,"Exit"}
+    }
+  },
+  {
+    MENU_STEP,
+    "Step",
+    8U,
+    {
+      {OPTION_STEP_10,"10"},
+      {OPTION_STEP_100,"100"},
+      {OPTION_STEP_500,"500"},
+      {OPTION_STEP_1000,"1000"},
+      {OPTION_STEP_5000,"5000"},
+      {OPTION_STEP_10000,"10000"},
+      {OPTION_STEP_100000,"100000"},
+      {OPTION_EXIT,"Exit"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"},
+      {OPTION_NONE,"None"}
     }
   },
   {

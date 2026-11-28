@@ -1,6 +1,6 @@
 /*
  *
- * MBPTRX Version 10.4.240
+ * MBPTRX Version 10.8.240
  *
  * Copyright 2026 Ian Mitchell VK7IAN
  * Licenced under the GNU GPL Version 3
@@ -125,10 +125,18 @@
  *  10.2.240 centre AM/FM/SSB
  *  10.3.240 TX level popup
  *  10.4.240 fix tiny DC spike
+ *  10.5.240 FT8 buffer processing
+ *  10.6.240 FT8 CQ issue fixed
+ *  10.7.240 SI5351 tuning improvement
+ *  10.8.240 birdie removal
  */
 
 //#define DEBUGGING_SKIP
-        
+
+// show FT8 display timing in place of the frequency
+// comment out for normal use
+//#define FT8_TIMING_DEBUG
+
 #include <SPI.h>
 #include <EEPROM.h>
 #include <TFT_eSPI2.h>
@@ -172,12 +180,11 @@
 #ifdef USE_TINYUSB
 #error "Tools > USB Stack must be set to 'No USB' (TinyUSB selected)"
 #endif
-
 #if SI5351_PLL_VCO_MIN != 440000000
 #error set SI5351_PLL_VCO_MIN to 440000000 in si5351.h
 #endif
 
-#define VERSION_STRING "  V10.4."
+#define VERSION_STRING "  V10.8."
 #define CW_TIMEOUT 800u
 #define MENU_TIMEOUT 5000u
 #define VOX_LEVEL 100u
@@ -356,6 +363,17 @@ static_assert((MAX_ADC_SAMPLES & (MAX_ADC_SAMPLES - 1)) == 0, "MAX_ADC_SAMPLES m
 #define ERROR_FWDADC   7u
 #define ERROR_REFADC   8u
 #define ERROR_SPRITE   9u
+
+// hide the fixed 10 m birdie on the spectrum and waterfall (display only)
+#define BIRDIE_REMOVAL
+// show the strongest bin near the birdie instead of removing it,
+// to set BIRDIE_BIN (bin in debug value 1, level in debug value 2)
+//#define BIRDIE_FIND
+#define BIRDIE_BIN    83u        // magnitude[] index, about -13 kHz
+#define BIRDIE_SEARCH 6u         // bins either side to look for its peak
+#define BIRDIE_WIDTH  2u         // bins removed either side of the peak
+#define BIRDIE_F_MIN  28000000ul // only on 10 m
+#define BIRDIE_F_MAX  29700000ul // only on 10 m
 
 enum ft8_call_t
 {
@@ -855,15 +873,21 @@ static void set_frequency(const uint32_t ft8_offset = 0u)
   }
   const uint64_t f = SI5351_FREQ_MULT * (radio.frequency+rx_cwoffset+ifshift) + ft8_offset;
   const uint64_t p = f * quadrature_divisor;
+  if (old_quadrature_divisor == quadrature_divisor)
+  {
+    // same even integer divider: only the PLL moves, both
+    // multisynths keep their ratio and stay in quadrature
+    SI5351.set_pll(p,SI5351_PLLA);
+    return;
+  }
+  old_quadrature_divisor = quadrature_divisor;
   SI5351.set_freq_manual(f,p,SI5351_CLK0);
   SI5351.set_freq_manual(f,p,SI5351_CLK1);
-  if (old_quadrature_divisor != quadrature_divisor)
-  {
-    old_quadrature_divisor = quadrature_divisor;
-    SI5351.set_phase(SI5351_CLK0,0);
-    SI5351.set_phase(SI5351_CLK1,quadrature_divisor);
-    SI5351.pll_reset(SI5351_PLLA);
-  }
+  SI5351.set_phase(SI5351_CLK0,0);
+  SI5351.set_phase(SI5351_CLK1,quadrature_divisor);
+  SI5351.set_int(SI5351_CLK0,1);
+  SI5351.set_int(SI5351_CLK1,1);
+  SI5351.pll_reset(SI5351_PLLA);
 }
 
 void setup(void)
@@ -2691,6 +2715,42 @@ void __not_in_flash_func(loop1)(void)
   }
 }
 
+#if defined(BIRDIE_REMOVAL) || defined(BIRDIE_FIND)
+static void remove_birdie(uint8_t mag[])
+{
+#ifdef BIRDIE_FIND
+  // wide search, about +/-1.2 kHz, nothing removed
+  static constexpr uint32_t search = 40u;
+#else
+  static constexpr uint32_t search = BIRDIE_SEARCH;
+#endif
+  // find the peak near the birdie
+  uint32_t peak = BIRDIE_BIN;
+  for (uint32_t i=BIRDIE_BIN-search;i<=BIRDIE_BIN+search;i++)
+  {
+    if (mag[i]>mag[peak])
+    {
+      peak = i;
+    }
+  }
+#ifdef BIRDIE_FIND
+  debug_value_1 = (int32_t)peak;
+  debug_value_2 = (int32_t)mag[peak];
+#else
+  // replace the peak and its main lobe by a straight line
+  // between the bins just outside it
+  const uint32_t lo = peak-BIRDIE_WIDTH-1u;
+  const uint32_t hi = peak+BIRDIE_WIDTH+1u;
+  const int32_t a = mag[lo];
+  const int32_t b = mag[hi];
+  for (uint32_t i=lo+1u;i<hi;i++)
+  {
+    mag[i] = (uint8_t)(a+((b-a)*(int32_t)(i-lo))/(int32_t)(hi-lo));
+  }
+#endif
+}
+#endif
+
 static void process_spectrum(void)
 {
   uint32_t offset = 0;
@@ -2720,6 +2780,12 @@ static void process_spectrum(void)
     data_im[i] = adc_data_q[i+offset];
   }
   spectrum::process(data_re,data_im,magnitude,gain,radio.frequency);
+#if defined(BIRDIE_REMOVAL) || defined(BIRDIE_FIND)
+  if (!radio.tx_enable && radio.frequency>=BIRDIE_F_MIN && radio.frequency<=BIRDIE_F_MAX)
+  {
+    remove_birdie(magnitude);
+  }
+#endif
 }
 
 
@@ -3335,6 +3401,59 @@ static void ft8_show_new_indicator(void)
   lcd.print("NEW");
 }
 
+// is the first word of a decoded message exactly "CQ"?
+// a callsign containing CQ (W1CQ, CQ7ABC) is not a CQ call
+static const bool ft8_is_cq(const char *msg)
+{
+  return (msg[0] == 'C') && (msg[1] == 'Q') && ((msg[2] == ' ') || (msg[2] == '\0'));
+}
+
+// does the message contain this word as a whole word?
+// words are separated by spaces, a hashed callsign <...> also matches
+static const bool ft8_has_word(const char *msg, const char *word)
+{
+  const size_t n = strlen(word);
+  if (n == 0u)
+  {
+    return false;
+  }
+  const char *p = msg;
+  while ((p = strstr(p, word)) != NULL)
+  {
+    const bool start = (p == msg) || (p[-1] == ' ') || (p[-1] == '<');
+    const char end = p[n];
+    const bool stop = (end == '\0') || (end == ' ') || (end == '>');
+    if (start && stop)
+    {
+      return true;
+    }
+    p++;
+  }
+  return false;
+}
+
+// message part of a decoded line: "+02.5 +0.12  998 CQ VK3ABC QF22"
+static const char *ft8_line_message(const char *line)
+{
+  const char *p = line;
+  for (uint32_t i = 0; i < 3u; i++)
+  {
+    while (*p == ' ')
+    {
+      p++;
+    }
+    while ((*p != ' ') && (*p != '\0'))
+    {
+      p++;
+    }
+  }
+  while (*p == ' ')
+  {
+    p++;
+  }
+  return p;
+}
+
 // Main decoded message display
 // AUTO mode: live history, newest 12 entries, no cursor
 // BROWSE/SELECTED: frozen snapshot, scrollable, cursor highlighted
@@ -3365,11 +3484,12 @@ static void ft8_show_decoded(const uint32_t slot_calibrate_ms)
       char buf[FT8_DISPLAY_COLS + 1];
       strncpy(buf, e->text, FT8_DISPLAY_COLS);
       buf[FT8_DISPLAY_COLS] = '\0';
-      if (strstr(buf,(const char*)radio.callsign) !=NULL)
+      const char *msg_text = ft8_line_message(e->text);
+      if (ft8_has_word(msg_text,(const char*)radio.callsign))
       {
         lcd.setTextColor(LCD_WHITE, LCD_RED);
       }
-      else if (strstr(buf,"CQ ") !=NULL)
+      else if (ft8_is_cq(msg_text))
       {
         lcd.setTextColor(LCD_WHITE, LCD_BLUE);
       }
@@ -3404,8 +3524,9 @@ static void ft8_show_decoded(const uint32_t slot_calibrate_ms)
       // Age check: warn if entry is more than 4 slots old
       const uint8_t age = current_slot_low - e->slot_number_low;
       const bool is_old = (age > 4);
-      const bool is_cq = strstr(buf,"CQ ") != NULL;
-      const bool is_mycall = strstr(buf,(const char*)radio.callsign) != NULL;
+      const char *msg_text = ft8_line_message(e->text);
+      const bool is_cq = ft8_is_cq(msg_text);
+      const bool is_mycall = ft8_has_word(msg_text,(const char*)radio.callsign);
 
       // Slot parity indicator prefix (1 char)
       if (is_selected) lcd.setTextColor(LCD_BLACK, LCD_GREEN);
@@ -3596,24 +3717,71 @@ static void ft8_show_calibrating(void)
   lcd.println("ms");
 }
 
+#ifdef FT8_TIMING_DEBUG
+static uint32_t ft8_t_draw = 0;     // drawing the screen, us
+static uint32_t ft8_t_push = 0;     // pushSprite, us
+static uint32_t ft8_t_poll = 0;     // last receive check, us (0 = none yet)
+static uint32_t ft8_t_gap = 0;      // longest gap this receive period, us
+static uint32_t ft8_t_gap_last = 0; // longest gap last receive period, us
+static uint32_t ft8_t_blocks = 0;   // blocks processed last receive period
+#endif
+
+#ifdef FT8_TIMING_DEBUG
+static void ft8_show_timing(void)
+{
+  char sz_timing[24] = "";
+  snprintf(sz_timing,sizeof(sz_timing),"%lu %lu %lu %lu",
+    (ft8_t_draw + 500ul) / 1000ul,
+    (ft8_t_push + 500ul) / 1000ul,
+    (ft8_t_gap_last + 500ul) / 1000ul,
+    ft8_t_blocks);
+  lcd.setFreeFont(&Arial_Bold14pt7b);
+  lcd.setTextSize(1);
+  lcd.setTextColor(LCD_YELLOW,LCD_BLACK);
+  lcd.setCursor(FT8_FREQUENCY_X,FT8_FREQUENCY_Y);
+  lcd.print(sz_timing);
+  lcd.setTextFont(1);
+  lcd.setTextSize(1);
+}
+#endif
+
+static void ft8_display_refresh(const uint32_t t0)
+{
+#ifdef FT8_TIMING_DEBUG
+  const uint32_t t1 = micros();
+  display_refresh();
+  const uint32_t t2 = micros();
+  ft8_t_draw = t1 - t0;
+  ft8_t_push = t2 - t1;
+#else
+  (void)t0;
+  display_refresh();
+#endif
+}
+
 static void ft8_display(
   const uint32_t slot_calibrate_ms,
   const ft8_state_t ft8_state,
   const uint32_t progress = 0,
   const bool calibrating = false)
 {
+  const uint32_t t0 = micros();
   display_clear();
   ft8_show_agc();
   ft8_show_pulse();
   ft8_show_swr();
+#ifdef FT8_TIMING_DEBUG
+  ft8_show_timing();
+#else
   ft8_show_frequency();
+#endif
   ft8_show_progress(progress);
   ft8_show_slot_status(slot_calibrate_ms, ft8_state);
   ft8_show_tx_frequency();
   if (calibrating)
   {
     ft8_show_calibrating();
-    display_refresh();
+    ft8_display_refresh(t0);
     return;
   }
   if (ft8_qso.active || millis() < ft8_qso_display_until)
@@ -3621,7 +3789,7 @@ static void ft8_display(
   else
     ft8_show_decoded(slot_calibrate_ms);
   ft8_show_popup();
-  display_refresh();
+  ft8_display_refresh(t0);
 }
 
 //------------------------------------------------------------------------------
@@ -3889,7 +4057,7 @@ static bool ft8_parse_cq(
 
   // msg should now be e.g. "CQ VK3ABC QF22" or "CQ DX VK3ABC QF22"
   // Ensure it starts with "CQ" (case insensitive for safety)
-  if (strncmp(msg, "CQ", 2) != 0 && strncmp(msg, "cq", 2) != 0) return false;
+  if (!ft8_is_cq(msg)) return false;
 
   // Tokenise: skip "CQ", optionally skip "DX"/"nnn"/"abcd" modifier
   char tokens[4][16] = { "", "", "", "" };
@@ -4330,13 +4498,11 @@ static void ft8_qso_check_rx(
     float snr = 0.0f, dt = 0.0f, freq = 0.0f;
     char msg[FTX_MAX_MESSAGE_LENGTH] = "";
     if (sscanf(lines[i], "%f %f %f %34[^\n]", &snr, &dt, &freq, msg) < 4) continue;
-
-    if (!strstr(msg, ft8_qso.their_call)) continue;
-    if (!strstr(msg, (const char*)radio.callsign)) continue;
+    if (!ft8_has_word(msg, ft8_qso.their_call)) continue;
+    if (!ft8_has_word(msg, (const char*)radio.callsign)) continue;
 
     const char* last_sp = strrchr(msg, ' ');
     const char* token = last_sp ? last_sp + 1 : msg;
-
     // ── Step-specific validation ──────────────────────────────────────
     if (ft8_qso.is_direct && step == 2)
     {
@@ -4350,11 +4516,15 @@ static void ft8_qso_check_rx(
 
       // Update T4 message based on what we received
       if (is_r_report)
+      {
         snprintf(ft8_qso.rows[3].text, FTX_MAX_DISPLAY_LENGTH,
           "%s %s RRR", ft8_qso.their_call, (const char*)radio.callsign);
+      }
       else
+      {
         snprintf(ft8_qso.rows[3].text, FTX_MAX_DISPLAY_LENGTH,
           "%s %s 73", ft8_qso.their_call, (const char*)radio.callsign);
+      }
     }
     else if (!ft8_qso.is_direct && step == 4)
     {
@@ -4449,9 +4619,9 @@ static bool ft8_qso_detect_poach(
     float freq = 0.0f;
     char msg[FTX_MAX_MESSAGE_LENGTH] = "";
     if (sscanf(lines[i], "%f %f %f %34[^\n]", &snr, &dt, &freq, msg) < 4) continue;
-    if (strncmp(msg, "CQ", 2) == 0) continue;
-    if (strstr(msg, (const char*)radio.callsign)) continue; // that's our reply
-    if (!strstr(msg, ft8_qso.their_call)) continue;
+    if (ft8_is_cq(msg)) continue;
+    if (ft8_has_word(msg, (const char*)radio.callsign)) continue; // that's our reply
+    if (!ft8_has_word(msg, ft8_qso.their_call)) continue;
 
     char to[16] = "";
     char from[16] = "";
@@ -4615,6 +4785,8 @@ static const bool do_ft8(const bool cal_reset = false)
   static uint32_t progress = 0;
   static ft8_state_t ft8_state = FT8_STATE_WAITING;
   static bool ft8_hash_init = false;
+  // which half of ft8_data was processed last
+  static uint32_t ft8_last_half = UINT32_MAX;
 
   // make sure call and grid are set
   if (!check_station_details())
@@ -4808,6 +4980,23 @@ static const bool do_ft8(const bool cal_reset = false)
         {
           progress = 0;
           ft8_monitor_init(&ft8mon);
+          // first block as before: the half just completed if it finished
+          // less than 400 samples (51 ms) ago, otherwise wait for the next
+          const uint32_t p = ft8_sample_p;
+          const uint32_t half = FT8_FFT_SIZE / 2;
+          const uint32_t done = (p < half) ? half : 0u;
+          if ((p % half) < 400u)
+          {
+            ft8_last_half = UINT32_MAX;
+          }
+          else
+          {
+            ft8_last_half = done;
+          }
+#ifdef FT8_TIMING_DEBUG
+          ft8_t_poll = 0;
+          ft8_t_gap = 0;
+#endif
           ft8_state = FT8_STATE_RECEIVING;
         }
       }
@@ -4815,36 +5004,40 @@ static const bool do_ft8(const bool cal_reset = false)
     }
     case FT8_STATE_RECEIVING:
     {
-      static const uint32_t buff_size = FT8_FFT_SIZE / 2;  // 1250
-      static uint32_t last_offset = UINT32_MAX;
-
-      // Reset last_offset when re-entering receiving state
-      if (slot_ms < FT8_START_THRESHOLD + 50u) last_offset = UINT32_MAX;
-
-      const uint32_t sample_p = ft8_sample_p;
-      uint32_t offset = 0;
-      bool valid = true;
-
-      if (sample_p < 400u)
-        // second half complete
-        offset = buff_size;
-      else if (sample_p >= buff_size && sample_p < (buff_size + 400u))
-        // first half complete
-        offset = 0;
-      else
-        // dead zone
-        valid = false;
-
-      if (valid && offset != last_offset)
+#ifdef FT8_TIMING_DEBUG
+      const uint32_t now_us = micros();
+      if (ft8_t_poll != 0)
       {
-        last_offset = offset;
+        const uint32_t gap = now_us - ft8_t_poll;
+        if (gap > ft8_t_gap)
+        {
+          ft8_t_gap = gap;
+        }
+      }
+      ft8_t_poll = now_us;
+#endif
+      // ft8_data is two halves of FT8_FFT_SIZE/2 samples, 160 ms each.
+      // While core 1 fills one half, the other is complete and unchanged
+      // for 160 ms, so it can be processed at any time in that period.
+      // A slow display (larger or 8 bit sprite) no longer loses blocks.
+      static const uint32_t buff_size = FT8_FFT_SIZE / 2;  // 1250
+      const uint32_t sample_p = ft8_sample_p;
+      const uint32_t offset = (sample_p < buff_size) ? buff_size : 0u;
+      if (offset != ft8_last_half)
+      {
+        ft8_last_half = offset;
         ft8_monitor_process(&ft8mon, (const float*)ft8_data + offset);
         progress++;
       }
 
       if (slot_ms >= FT8_RECEIVE_MS)
+      {
+#ifdef FT8_TIMING_DEBUG
+        ft8_t_gap_last = ft8_t_gap;
+        ft8_t_blocks = progress;
+#endif
         ft8_state = FT8_STATE_DECODING;
-
+      }
       break;
     }
     case FT8_STATE_DECODING:
