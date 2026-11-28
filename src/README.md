@@ -105,3 +105,7 @@
  * 10.2.240 centre AM/FM/SSB
  * 10.3.240 TX level popup
  * 10.4.240 fix tiny DC spike
+ * 10.5.240 FT8 buffer processing
+ * 10.6.240 FT8 CQ issue fixed
+ * 10.7.240 SI5351 tuning improvement
+ * 10.8.240 birdie removal
